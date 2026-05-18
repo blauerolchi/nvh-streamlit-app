@@ -499,7 +499,7 @@ with col_params:
             "Amplitude": f"{amplitude:.2f}",
         }
 
-    do_run = st.button("▶  Signal abspielen", width="stretch", type="primary")
+    do_run = st.button("▶  Signal abspielen", use_container_width=True, type="primary")
 
 # ==================================================
 # DATA COLUMN
@@ -531,7 +531,7 @@ with col_data:
             data=png_bytes,
             file_name=fname,
             mime="image/png",
-            width="stretch",
+            use_container_width=True,
         )
 
         # Audio
@@ -548,7 +548,7 @@ with col_data:
                 data=wav_bytes,
                 file_name=f"NVH_{selected_code}_{ts}.wav",
                 mime="audio/wav",
-                width="stretch",
+                use_container_width=True,
             )
 
 # ==================================================
