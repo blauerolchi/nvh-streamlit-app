@@ -1,10 +1,7 @@
-# WICHTIG: OMP/BLAS Limits GANZ OBEN, noch vor Streamlit/NumPy!
 import os
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
-os.environ["NUMEXPR_NUM_THREADS"] = "1"
+# Zwingt Matplotlib auf OS-Ebene in den Headless-Modus, BEVOR es geladen wird.
+# Verhindert sofortige Abstürze (X11-Crashes) beim Booten des Cloud-Servers.
+os.environ['MPLBACKEND'] = 'Agg'
 
 import streamlit as st
 import numpy as np
@@ -88,13 +85,11 @@ def compute_metrics(signal):
             "db_peak": 20*np.log10(peak) if peak>0 else -120.0, "n_samples": len(signal)}
 
 def get_waveform_envelope(signal, num_points=1000):
-    """Extrahiert Min/Max-Hüllkurve extrem speichereffizient (Audacity-Style)"""
     n = len(signal)
     if n <= num_points * 2:
         return np.linspace(0, n/SAMPLE_RATE, n), signal, signal
         
     chunk_size = n // num_points
-    # Signal auf Vielfaches von chunk_size trimmen
     sig_trunc = signal[:num_points * chunk_size]
     sig_reshaped = sig_trunc.reshape(num_points, chunk_size)
     
@@ -107,7 +102,7 @@ def make_science_figure_bytes(signal, title, extra_info, scenario_code):
     n, sr = len(signal), SAMPLE_RATE
     m = compute_metrics(signal)
     
-    fig = Figure(figsize=(13, 8), dpi=90) # Leicht reduziertes DPI für Sicherheit
+    fig = Figure(figsize=(13, 8), dpi=90)
     canvas = FigureCanvasAgg(fig)
     fig.patch.set_facecolor("#0d1117")
     gs = gridspec.GridSpec(3, 3, figure=fig, hspace=0.55, wspace=0.40, left=0.07, right=0.97, top=0.87, bottom=0.09)
@@ -119,7 +114,6 @@ def make_science_figure_bytes(signal, title, extra_info, scenario_code):
     
     ACCENT, GREEN, ORANGE = "#58a6ff", "#3fb950", "#d29922"
     
-    # 1. ZEITBEREICH (Hüllkurven-Methode: 0% Matplotlib Vector Leak)
     t_plot, sig_min, sig_max = get_waveform_envelope(signal, num_points=1000)
     
     ax_time.set_title("Zeitbereich / Time Domain", pad=6, color="#c9d1d9")
@@ -135,7 +129,6 @@ def make_science_figure_bytes(signal, title, extra_info, scenario_code):
     ax_time.axhline(-rms_val, color=GREEN, lw=0.8, ls="--", alpha=0.7)
     ax_time.legend(fontsize=7, loc="upper right", framealpha=0.15)
     
-    # 2. FREQUENZBEREICH (Strikte Dezimierung für den Plot)
     MAX_FFT_PTS = 500000 
     if n > MAX_FFT_PTS:
         fft_sig = signal[:MAX_FFT_PTS]
@@ -151,7 +144,6 @@ def make_science_figure_bytes(signal, title, extra_info, scenario_code):
     valid = freqs > 0
     f_val, fft_val = freqs[valid], fft_db[valid]
     
-    # Reduziere die Punkte, die Matplotlib zeichnen muss, auf max 2000
     step_f = max(1, len(f_val) // 2000)
     f_plot, fft_plot = f_val[::step_f], fft_val[::step_f]
     
@@ -165,7 +157,6 @@ def make_science_figure_bytes(signal, title, extra_info, scenario_code):
     ax_fft.set_ylabel("Magnitude [dBFS]")
     ax_fft.fill_between(f_plot, fft_plot, db_floor, color=ORANGE, alpha=0.06)
     
-    # 3. SPEKTROGRAMM (IMSHOW statt PCOLORMESH - Verhindert Polygon-Explosion)
     ax_spec.set_title("Spektrogramm / STFT", pad=6, color="#c9d1d9")
     try:
         step_spec = max(1, n // 500000)
@@ -177,7 +168,6 @@ def make_science_figure_bytes(signal, title, extra_info, scenario_code):
         f_spec, t_spec, Sxx = sg.spectrogram(spec_sig, fs=sr_spec, nperseg=seg, noverlap=seg//2)
         Sxx_db = 10 * np.log10(np.maximum(Sxx, 1e-12))
         
-        # imshow ist millionenfach effizienter für den RAM als pcolormesh
         extent = [t_spec[0]*step_spec, t_spec[-1]*step_spec, f_spec[0], f_spec[-1]]
         ax_spec.imshow(Sxx_db, aspect='auto', origin='lower', extent=extent, cmap="inferno", vmin=-120, vmax=0)
         
@@ -189,7 +179,6 @@ def make_science_figure_bytes(signal, title, extra_info, scenario_code):
     except Exception as e:
         ax_spec.text(0.5, 0.5, "Spektrogramm übersprungen", ha="center", va="center", color="#6e7681", transform=ax_spec.transAxes)
         
-    # 4. INFO PANEL
     ax_info.set_axis_off()
     info_lines = [("SZENARIO", scenario_code), ("", title), ("SEP", ""),
                   ("Abtastrate", f"{sr:,} Hz"), ("Samples", f"{m['n_samples']:,}"),
@@ -201,7 +190,7 @@ def make_science_figure_bytes(signal, title, extra_info, scenario_code):
     for k, v in extra_info.items():
         info_lines.append((k, str(v)))
         
-    info_lines += [("", ""), ("SEP", ""), ("Erstellt", datetime.datetime.now().strftime("%Y-%m-%d")), ("Version", "NVH Lab v5.0 (Ultra-Light)")]
+    info_lines += [("", ""), ("SEP", ""), ("Erstellt", datetime.datetime.now().strftime("%Y-%m-%d")), ("Version", "NVH Lab v5.1 (Stable Boot)")]
     y = 0.97
     
     for label, value in info_lines:
@@ -285,7 +274,7 @@ with col_params:
 
 # SIGNAL GENERATION
 if do_run:
-    with st.spinner("Generiere Signal und Diagramme (Ultra-Light)..."):
+    with st.spinner("Generiere Signal und Diagramme..."):
         sr = SAMPLE_RATE
         if selected_code == "V2a":
             d, fs_start, fep, amp = params["duration"], params["f_start"], params["f_end_pct"], params["amplitude"]
@@ -377,4 +366,4 @@ if st.button("Protokoll speichern"):
     else:
         st.error("Bitte zuerst ein Messsystem auswählen.")
         
-st.markdown(f"<div style='text-align:center;margin-top:3rem;padding-top:1.5rem;border-top:1px solid #21262d;font-family:\"IBM Plex Mono\",monospace;font-size:0.68rem;color:#6e7681;'>NVH Signal Lab v5.0 (Ultra-Light)  ·  fs = {SAMPLE_RATE:,} Hz  ·  16-bit PCM</div>", unsafe_allow_html=True)
+st.markdown(f"<div style='text-align:center;margin-top:3rem;padding-top:1.5rem;border-top:1px solid #21262d;font-family:\"IBM Plex Mono\",monospace;font-size:0.68rem;color:#6e7681;'>NVH Signal Lab v5.1 (Stable Boot)  ·  fs = {SAMPLE_RATE:,} Hz  ·  16-bit PCM</div>", unsafe_allow_html=True)
