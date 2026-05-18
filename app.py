@@ -164,19 +164,19 @@ elif test_scenario == "V3: Clipping-Test":
     samples_per_pulse = int(SAMPLE_RATE * pulse_duration)
     samples_spacing = int(SAMPLE_RATE * (pulse_spacing / 1000))
 
-    # 👉 harter "Peitschenschlag"
-    single_pulse = np.zeros(samples_per_pulse)
+    # 👉 "Peitschenschlag" als Burst (NICHT mehr Einzelpeak!)
+    burst_freq = 2000  # gut hörbar & messbar
+    burst_duration = 0.02  # 20 ms (wichtig!)
 
-    # sehr steiler Impuls → gut für Clipping
-    peak_len = int(samples_per_pulse * 0.2)
+    t_burst = np.linspace(0, burst_duration, int(SAMPLE_RATE * burst_duration), endpoint=False)
 
-    single_pulse[:peak_len] = amplitude
-    single_pulse[peak_len:2*peak_len] = -amplitude
+    # Sinus Burst
+    single_pulse = amplitude * np.sin(2 * np.pi * burst_freq * t_burst)
 
-    # kurze Ausklingphase
-    if len(single_pulse) > 2*peak_len:
-        decay = np.linspace(1, 0, len(single_pulse) - 2*peak_len)
-        single_pulse[2*peak_len:] = amplitude * decay
+    # Fenster -> verhindert Klicks & Limiting
+    window = np.hanning(len(single_pulse))
+    single_pulse = single_pulse * window
+    ``
 
     # 👉 Sequenz bauen
     signal = []
