@@ -1,5 +1,4 @@
-# WICHTIG: Diese Zeilen MÜSSEN ganz oben stehen, noch vor allen anderen Imports!
-# Sie verhindern den "Silent Crash" durch zu viele Threads in der Streamlit Cloud.
+# WICHTIG: OMP/BLAS Limits müssen ganz oben stehen!
 import os
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
@@ -15,7 +14,6 @@ import scipy.signal as sg
 import datetime
 import gc
 
-# Pyplot wird KOMPLETT verbannt, um Memory Leaks zu 100% auszuschließen.
 import matplotlib as mpl
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -92,11 +90,8 @@ def compute_metrics(signal):
 def make_science_figure_bytes(signal, title, extra_info, scenario_code):
     n, sr = len(signal), SAMPLE_RATE
     t = np.linspace(0, n/sr, n)
-    
-    # Metriken berechnen
     m = compute_metrics(signal)
     
-    # Objektorientierte Figure erstellen (verhindert Memory Leaks)
     fig = Figure(figsize=(13, 8), dpi=100)
     canvas = FigureCanvasAgg(fig)
     fig.patch.set_facecolor("#0d1117")
@@ -109,7 +104,7 @@ def make_science_figure_bytes(signal, title, extra_info, scenario_code):
     
     ACCENT, GREEN, ORANGE = "#58a6ff", "#3fb950", "#d29922"
     
-    # 1. ZEITBEREICH (mit massivem Downsampling für Plotting)
+    # 1. ZEITBEREICH (Sicheres Downsampling)
     MAX_PTS = 20000 
     step_t = max(1, n // MAX_PTS)
     t_plot, sig_plot = t[::step_t], signal[::step_t]
@@ -128,9 +123,18 @@ def make_science_figure_bytes(signal, title, extra_info, scenario_code):
     ax_time.axhline(-rms_val, color=GREEN, lw=0.8, ls="--", alpha=0.7)
     ax_time.legend(fontsize=7, loc="upper right", framealpha=0.15)
     
-    # 2. FREQUENZBEREICH (FFT)
-    fft_vals = np.abs(np.fft.rfft(signal)) / n
-    freqs = np.fft.rfftfreq(n, 1/sr)
+    # 2. FREQUENZBEREICH (Speichersichere FFT)
+    # Begrenzung auf max. 2^20 (ca. 1 Mio) Punkte, um Server-Crashes bei der FFT zu vermeiden!
+    MAX_FFT_PTS = 1048576 
+    if n > MAX_FFT_PTS:
+        fft_sig = signal[:MAX_FFT_PTS]
+        n_fft = MAX_FFT_PTS
+    else:
+        fft_sig = signal
+        n_fft = n
+        
+    fft_vals = np.abs(np.fft.rfft(fft_sig)) / n_fft
+    freqs = np.fft.rfftfreq(n_fft, 1/sr)
     fft_db = 20 * np.log10(np.maximum(fft_vals, 1e-12))
     
     valid = freqs > 0
@@ -148,14 +152,17 @@ def make_science_figure_bytes(signal, title, extra_info, scenario_code):
     ax_fft.set_ylabel("Magnitude [dBFS]")
     ax_fft.fill_between(f_plot, fft_plot, db_floor, color=ORANGE, alpha=0.06)
     
-    # 3. SPEKTROGRAMM (Sicher und gecappt)
+    # 3. SPEKTROGRAMM
     ax_spec.set_title("Spektrogramm / STFT", pad=6, color="#c9d1d9")
     try:
-        seg = min(4096, max(512, n // 400))
-        f_spec, t_spec, Sxx = sg.spectrogram(signal, fs=sr, nperseg=seg, noverlap=seg//2)
+        # Welch / STFT mit strikt begrenzter Array-Größe
+        spec_sig = signal[::max(1, n//1000000)] # Maximal 1 Mio Punkte für STFT nutzen
+        n_spec = len(spec_sig)
+        seg = min(4096, max(512, n_spec // 400))
+        
+        f_spec, t_spec, Sxx = sg.spectrogram(spec_sig, fs=sr, nperseg=seg, noverlap=seg//2)
         Sxx_db = 10 * np.log10(np.maximum(Sxx, 1e-12))
         
-        # Hard-Cap für die Matrixgröße vor dem Rendern! (Verhindert 100% OOM)
         if Sxx_db.shape[1] > 800:
             st_t = Sxx_db.shape[1] // 800
             Sxx_db = Sxx_db[:, ::st_t]
@@ -166,7 +173,7 @@ def make_science_figure_bytes(signal, title, extra_info, scenario_code):
             f_spec = f_spec[::st_f]
             
         ax_spec.pcolormesh(t_spec, f_spec, Sxx_db, cmap="inferno", vmin=-120, vmax=0, rasterized=True, shading='nearest')
-        ax_spec.set_xlabel("Zeit [s]")
+        ax_spec.set_xlabel("Zeit [s] (Ausschnitt)")
         ax_spec.set_ylabel("Frequenz [Hz]")
         ax_spec.set_yscale("log")
         ax_spec.set_ylim(20, sr/2)
@@ -185,7 +192,7 @@ def make_science_figure_bytes(signal, title, extra_info, scenario_code):
     for k, v in extra_info.items():
         info_lines.append((k, str(v)))
         
-    info_lines += [("", ""), ("SEP", ""), ("Erstellt", datetime.datetime.now().strftime("%Y-%m-%d")), ("Version", "NVH Signal Lab v3.0 (Stable)")]
+    info_lines += [("", ""), ("SEP", ""), ("Erstellt", datetime.datetime.now().strftime("%Y-%m-%d")), ("Version", "NVH Signal Lab v3.5 (OOM-Safe)")]
     y = 0.97
     
     for label, value in info_lines:
@@ -203,17 +210,13 @@ def make_science_figure_bytes(signal, title, extra_info, scenario_code):
     fig.text(0.04, 0.95, f"NVH Signal Lab  ·  {scenario_code}: {title}", fontsize=11, color="#e6edf3", fontfamily="monospace", fontweight="bold")
     fig.text(0.04, 0.922, f"fs={sr:,} Hz  |  N={m['n_samples']:,}  |  Δf={sr/m['n_samples']:.3f} Hz  |  {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}", fontsize=7.5, color="#6e7681", fontfamily="monospace")
     
-    # In Bytes schreiben
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight", facecolor="#0d1117", edgecolor="none")
     buf.seek(0)
     img_bytes = buf.getvalue()
     
-    # Speicher radikal und explizit leeren!
     fig.clf()
-    del fig, canvas, ax_time, ax_fft, ax_spec, ax_info, gs, Sxx, Sxx_db, fft_vals
-    gc.collect() 
-    
+    del fig, canvas, ax_time, ax_fft, ax_spec, ax_info, gs
     return img_bytes, m
 
 def metric_html(label, value, unit=""):
@@ -271,9 +274,9 @@ with col_params:
     
     do_run = st.button("▶  Signal generieren & abspielen", type="primary", use_container_width=True)
 
-# SIGNAL GENERATION
+# SIGNAL GENERATION & SAFE MEMORY MANAGEMENT
 if do_run:
-    with st.spinner("Signal wird generiert und analysiert..."):
+    with st.spinner("Generiere Signal und Diagramme..."):
         sr = SAMPLE_RATE
         if selected_code == "V2a":
             d, fs_start, fep, amp = params["duration"], params["f_start"], params["f_end_pct"], params["amplitude"]
@@ -309,16 +312,19 @@ if do_run:
             
         final_sig = assemble_signal(sig)
         
-        # Einmalige Berechnung der Grafik direkt hier
+        # Grafik & WAV erstellen
         png_bytes, metrics = make_science_figure_bytes(final_sig, scenario_title, extra, selected_code)
+        wav_b = generate_wav_bytes(final_sig)
         
-        st.session_state["wav_bytes"] = generate_wav_bytes(final_sig)
+        # WICHTIG: NUR DIE BYTES SPEICHERN! KEINE RAW-ARRAYS IN SESSION_STATE!
         st.session_state["png_bytes"] = png_bytes
+        st.session_state["wav_bytes"] = wav_b
         st.session_state["metrics"] = metrics
         st.session_state["ts"] = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         st.session_state["sc"] = selected_code
         
-        del final_sig, sig, t # Ram direkt leeren
+        # ZWINGENDER SPEICHERABBAU (Der Retter vor OOM)
+        del final_sig, sig, t 
         gc.collect()
 
 # DATA COLUMN
@@ -336,7 +342,6 @@ with col_data:
         show_metrics(m)
         st.markdown('<div class="section-title">Signalanalyse</div>', unsafe_allow_html=True)
         
-        # Bild anzeigen
         st.image(png_bytes, use_container_width=True)
         st.download_button("⬇  Abbildung als PNG exportieren", data=png_bytes, file_name=f"NVH_{sc}_{ts}.png", mime="image/png")
         
@@ -364,4 +369,4 @@ if st.button("Protokoll speichern"):
     else:
         st.error("Bitte zuerst ein Messsystem auswählen.")
         
-st.markdown(f"<div style='text-align:center;margin-top:3rem;padding-top:1.5rem;border-top:1px solid #21262d;font-family:\"IBM Plex Mono\",monospace;font-size:0.68rem;color:#6e7681;'>NVH Signal Lab v3.0 (Stable)  ·  fs = {SAMPLE_RATE:,} Hz  ·  16-bit PCM  ·  {datetime.datetime.now().strftime('%Y')}</div>", unsafe_allow_html=True)
+st.markdown(f"<div style='text-align:center;margin-top:3rem;padding-top:1.5rem;border-top:1px solid #21262d;font-family:\"IBM Plex Mono\",monospace;font-size:0.68rem;color:#6e7681;'>NVH Signal Lab v3.5 (OOM-Safe)  ·  fs = {SAMPLE_RATE:,} Hz  ·  16-bit PCM  ·  {datetime.datetime.now().strftime('%Y')}</div>", unsafe_allow_html=True)
