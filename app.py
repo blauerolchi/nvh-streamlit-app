@@ -144,19 +144,46 @@ elif test_scenario == "V2b: Pegel-Stufentest":
         st.success(f"Frequenz: {freq} Hz")
 
 # ==================================================
-# V3 Clipping
+# V3 Clipping / Impuls-Serie
 # ==================================================
 elif test_scenario == "V3: Clipping-Test":
 
-    st.write("Impuls-Test mit Trigger")
+    st.write("Serie von Impulsen zur Analyse von Clipping und Systemreaktion")
 
-    duration = 0.05
-    signal = np.random.uniform(-1.0, 1.0, int(SAMPLE_RATE * duration))
+    # ✅ Anzahl Impulse
+    num_pulses = st.slider("Anzahl Impulse", 1, 20, 5)
 
+    # ✅ Abstand zwischen Impulsen
+    pulse_spacing = st.slider("Abstand zwischen Impulsen (ms)", 10, 1000, 200)
+
+    pulse_duration = 0.005  # 5 ms Impulsdauer
+
+    samples_per_pulse = int(SAMPLE_RATE * pulse_duration)
+    samples_spacing = int(SAMPLE_RATE * (pulse_spacing / 1000))
+
+    # 👉 einzelner "Peitschenschlag" (breitbandig)
+    single_pulse = np.random.uniform(-1.0, 1.0, samples_per_pulse)
+
+    # 👉 Sequenz bauen
+    signal = []
+
+    for i in range(num_pulses):
+        signal.append(single_pulse)
+
+        # Abstand danach (außer beim letzten)
+        if i < num_pulses - 1:
+            signal.append(np.zeros(samples_spacing))
+
+    signal = np.concatenate(signal)
+
+    # 👉 Trigger hinzufügen (deine neue SynchronLogik!)
     full_signal = assemble_signal(signal)
 
     if st.button("▶️ Test starten"):
+        st.warning("⚠️ Messsysteme vorher starten!")
         st.audio(generate_wav_bytes(full_signal), format="audio/wav")
+
+        st.success(f"{num_pulses} Impulse erzeugt")
 
 # ==================================================
 # V4 Rauschen
