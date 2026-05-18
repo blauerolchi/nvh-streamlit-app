@@ -73,11 +73,39 @@ def make_science_figure(signal, title, extra_info, scenario_code):
     plt.rcParams.update(PLOT_STYLE)
     n, sr = len(signal), SAMPLE_RATE
     t = np.linspace(0, n/sr, n)
+    
+    # Berechnungen für FFT in voller Präzision
     fft_vals = np.abs(np.fft.rfft(signal)) / n
     freqs = np.fft.rfftfreq(n, 1/sr)
     fft_db = 20 * np.log10(np.maximum(fft_vals, 1e-12))
     seg = min(2048, max(64, n//8))
     m = compute_metrics(signal)
+    
+    # --- SPEICHER-OPTIMIERUNG (OOM-Crash-Verhinderung) ---
+    # Wir dezimieren das Signal rein für die optische Darstellung im Plot, 
+    # falls es größer als 100.000 Punkte ist, was dem Arbeitsspeicher-Limit der Cloud entgegenwirkt.
+    MAX_PLOT_PTS = 100000
+    
+    if n > MAX_PLOT_PTS:
+        step = n // MAX_PLOT_PTS
+        t_plot = t[::step]
+        sig_plot = signal[::step]
+    else:
+        t_plot = t
+        sig_plot = signal
+        
+    valid = freqs > 0
+    freqs_valid = freqs[valid]
+    fft_db_valid = fft_db[valid]
+    
+    if len(freqs_valid) > MAX_PLOT_PTS:
+        step_fft = len(freqs_valid) // MAX_PLOT_PTS
+        f_plot = freqs_valid[::step_fft]
+        fft_plot = fft_db_valid[::step_fft]
+    else:
+        f_plot = freqs_valid
+        fft_plot = fft_db_valid
+    # ----------------------------------------------------
     
     fig = plt.figure(figsize=(13, 8))
     fig.patch.set_facecolor("#0d1117")
@@ -90,30 +118,31 @@ def make_science_figure(signal, title, extra_info, scenario_code):
     
     ACCENT, GREEN, ORANGE = "#58a6ff", "#3fb950", "#d29922"
     
+    # Render Zeitbereich mit reduzierter Punktdichte
     ax_time.set_title("Zeitbereich / Time Domain", pad=6, color="#c9d1d9")
-    ax_time.plot(t, signal, color=ACCENT, lw=0.6, alpha=0.85)
+    ax_time.plot(t_plot, sig_plot, color=ACCENT, lw=0.6, alpha=0.85)
     ax_time.axhline(0, color="#30363d", lw=0.8, zorder=0)
     ax_time.set_xlim(0, t[-1])
     ax_time.set_ylim(-1.1, 1.1)
     ax_time.set_xlabel("Zeit [s]")
     ax_time.set_ylabel("Amplitude")
-    ax_time.fill_between(t, signal, 0, color=ACCENT, alpha=0.06)
+    ax_time.fill_between(t_plot, sig_plot, 0, color=ACCENT, alpha=0.06)
     
     rms = m["rms"]
     ax_time.axhline(rms, color=GREEN, lw=0.8, ls="--", alpha=0.7, label=f"RMS ±{rms:.3f}")
     ax_time.axhline(-rms, color=GREEN, lw=0.8, ls="--", alpha=0.7)
     ax_time.legend(fontsize=7, loc="upper right", framealpha=0.15)
     
+    # Render FFT mit reduzierter Punktdichte
     ax_fft.set_title("Frequenzspektrum / Magnitude Spectrum", pad=6, color="#c9d1d9")
-    valid = freqs > 0
-    ax_fft.plot(freqs[valid], fft_db[valid], color=ORANGE, lw=0.7)
+    ax_fft.plot(f_plot, fft_plot, color=ORANGE, lw=0.7)
     ax_fft.set_xscale("log")
-    ax_fft.set_xlim(max(freqs[valid][0], 1), sr/2)
-    db_floor = max(float(np.min(fft_db[valid]))-5, -120)
+    ax_fft.set_xlim(max(f_plot[0], 1), sr/2)
+    db_floor = max(float(np.min(fft_plot))-5, -120)
     ax_fft.set_ylim(bottom=db_floor)
     ax_fft.set_xlabel("Frequenz [Hz]")
     ax_fft.set_ylabel("Magnitude [dBFS]")
-    ax_fft.fill_between(freqs[valid], fft_db[valid], db_floor, color=ORANGE, alpha=0.06)
+    ax_fft.fill_between(f_plot, fft_plot, db_floor, color=ORANGE, alpha=0.06)
     
     ax_spec.set_title("Spektrogramm / STFT", pad=6, color="#c9d1d9")
     try:
@@ -141,6 +170,7 @@ def make_science_figure(signal, title, extra_info, scenario_code):
     
     for label, value in info_lines:
         if label == "SEP":
+            # WICHTIG: plot verwenden für saubere Trennlinien, axhline produziert hier Fehler aufgrund von transform.
             ax_info.plot([0.02, 0.98], [y, y], color="#21262d", lw=0.7, transform=ax_info.transAxes, clip_on=False)
             y -= 0.025
             continue
@@ -280,7 +310,7 @@ with col_data:
         st.markdown('<div class="section-title">Signalanalyse</div>', unsafe_allow_html=True)
         
         fig = make_science_figure(fs_signal, st_title, ei, sc)
-        st.pyplot(fig)
+        st.pyplot(fig)  # Ohne use_container_width=True, um den Deprecation-Fehler zu vermeiden
         plt.close(fig)
         
         fig2 = make_science_figure(fs_signal, st_title, ei, sc)
