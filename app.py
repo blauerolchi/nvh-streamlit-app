@@ -3,27 +3,28 @@ import numpy as np
 import io
 import scipy.io.wavfile as wav
 
-
 st.set_page_config(page_title="NVH Signal Generator", layout="centered")
 st.title("🎛️ NVH Hardware-Validierung")
-st.write("Kontrollierte Signalquelle für isolierte Hardware-Tests.")
+st.write("Signalgenerator mit synchronisierbaren Triggern für NVH-Messsysteme")
 
-# ✅ Einheitliche Szenarionamen (Problem gelöst)
+# --------------------------------------------------
+# Szenarien
+# --------------------------------------------------
 SCENARIOS = [
     "V2a: Frequenz-Sweep",
     "V2b: Pegel-Stufentest",
-    "V3: Clipping-Test (Impuls)",
+    "V3: Clipping-Test",
     "V4: Weißes Rauschen"
 ]
 
 test_scenario = st.sidebar.radio("Wähle ein Messszenario:", SCENARIOS)
 
-# Konstanten für die Audio-Generierung
 SAMPLE_RATE = 44100
 
+# --------------------------------------------------
+# WAV Generator
+# --------------------------------------------------
 def generate_wav_bytes(signal):
-    """Konvertiert ein NumPy-Array in WAV"""
-    # Schutz gegen Division durch 0
     max_val = np.max(np.abs(signal))
     if max_val == 0:
         signal_normalized = signal
@@ -34,15 +35,57 @@ def generate_wav_bytes(signal):
     wav.write(byte_io, SAMPLE_RATE, signal_normalized)
     return byte_io.getvalue()
 
+
+# --------------------------------------------------
+# 🔥 TRIGGER GENERATOR
+# --------------------------------------------------
+def create_trigger():
+    """
+    Erzeugt einen klaren, breitbandigen Impuls:
+    - eindeutig detektierbar
+    - robust gegenüber Filtern
+    """
+    trigger_length = int(0.01 * SAMPLE_RATE)  # 10 ms
+
+    # kurzer Breitband-Impuls
+    trigger = np.zeros(trigger_length)
+    trigger[:int(trigger_length/4)] = 1.0
+    trigger[int(trigger_length/4):int(trigger_length/2)] = -1.0
+
+    return trigger
+
+
+def assemble_signal(main_signal):
+    """
+    Kombiniert:
+    [START TRIGGER] + [PAUSE] + [SIGNAL] + [PAUSE] + [END TRIGGER]
+    """
+    pause = np.zeros(int(0.2 * SAMPLE_RATE))  # 200 ms Pause
+
+    start_trigger = create_trigger()
+    end_trigger = create_trigger()
+
+    full_signal = np.concatenate([
+        start_trigger,
+        pause,
+        main_signal,
+        pause,
+        end_trigger
+    ])
+
+    return full_signal
+
+
 st.subheader(test_scenario)
 
-# --------------------------------------------------
-# V2a – Sweep
-# --------------------------------------------------
+# ==================================================
+# V2a Sweep
+# ==================================================
 if test_scenario == "V2a: Frequenz-Sweep":
-    st.write("Extremer logarithmischer Sweep von 0.5 Hz bis ~22 kHz")
 
-    duration = st.slider("Dauer (Sekunden)", 10, 120, 60)
+    st.write("Logarithmischer Sweep mit Start-/End-Trigger")
+
+    duration = st.slider("Sweepdauer (Sekunden)", 10, 120, 60)
 
     t = np.linspace(0, duration, SAMPLE_RATE * duration)
 
@@ -51,92 +94,90 @@ if test_scenario == "V2a: Frequenz-Sweep":
 
     L = duration / np.log(f_end / f_start)
     phase = 2 * np.pi * f_start * L * (np.exp(t / L) - 1)
+
     signal = np.sin(phase)
 
-    st.audio(generate_wav_bytes(signal), format="audio/wav")
+    full_signal = assemble_signal(signal)
 
-# --------------------------------------------------
-# ✅ V2b – FIXED VERSION
-# --------------------------------------------------
+    if st.button("▶️ Test starten"):
+        st.warning("⚠️ Beide Messsysteme müssen bereits aufnehmen!")
+        st.audio(generate_wav_bytes(full_signal), format="audio/wav")
+
+
+# ==================================================
+# V2b Pegeltest
+# ==================================================
 elif test_scenario == "V2b: Pegel-Stufentest":
 
-    st.write("Sinuston mit frei wählbarer Frequenz und Pegelabfall")
+    st.write("Sinuston mit Triggern zur Synchronisierung")
 
-    # ✅ Frequenzsteuerung
-    freq = st.slider(
-        "Frequenz (Hz)",
-        min_value=10,
-        max_value=20000,
-        value=550,
-        step=10
-    )
-
-    # ✅ Dauer einstellbar (optional)
+    freq = st.slider("Frequenz (Hz)", 10, 20000, 550)
     duration = st.slider("Dauer (Sekunden)", 5, 60, 45)
 
     t = np.linspace(0, duration, SAMPLE_RATE * duration)
-
-    # ✅ Pegelverlauf
     amplitude_envelope = np.linspace(1.0, 0.0, len(t))
 
     signal = np.sin(2 * np.pi * freq * t) * amplitude_envelope
 
-    # ✅ Audio IMMER anzeigen
-    audio_bytes = generate_wav_bytes(signal)
-    st.audio(audio_bytes, format="audio/wav")
+    full_signal = assemble_signal(signal)
 
-    # ✅ Anzeige
-    st.success(f"Aktuelle Frequenz: {freq} Hz")
+    if st.button("▶️ Test starten"):
+        st.warning("⚠️ Messsysteme müssen vorab scharf geschaltet sein!")
+        st.audio(generate_wav_bytes(full_signal), format="audio/wav")
+        st.success(f"Frequenz: {freq} Hz")
 
-# --------------------------------------------------
-# V3 – Impuls
-# --------------------------------------------------
-elif test_scenario == "V3: Clipping-Test (Impuls)":
-    st.write("Kurzimpuls zur Clipping-Analyse")
+
+# ==================================================
+# V3 Clipping
+# ==================================================
+elif test_scenario == "V3: Clipping-Test":
+
+    st.write("Clipping-Impuls mit Triggern")
 
     duration = 0.05
     signal = np.random.uniform(-1.0, 1.0, int(SAMPLE_RATE * duration))
 
-    st.audio(generate_wav_bytes(signal), format="audio/wav")
+    full_signal = assemble_signal(signal)
 
-# --------------------------------------------------
-# V4 – Rauschen
-# --------------------------------------------------
+    if st.button("▶️ Test starten"):
+        st.audio(generate_wav_bytes(full_signal), format="audio/wav")
+
+
+# ==================================================
+# V4 Rauschen
+# ==================================================
 elif test_scenario == "V4: Weißes Rauschen":
-    st.write("Breitbandiges weißes Rauschen")
+
+    st.write("Weißes Rauschen mit Synchron-Triggern")
 
     duration = st.slider("Dauer (Sekunden)", 5, 60, 15)
 
     signal = np.random.uniform(-1.0, 1.0, SAMPLE_RATE * duration)
 
-    st.audio(generate_wav_bytes(signal), format="audio/wav")
+    full_signal = assemble_signal(signal)
 
-# --------------------------------------------------
+    if st.button("▶️ Test starten"):
+        st.audio(generate_wav_bytes(full_signal), format="audio/wav")
+
+
+# ==================================================
 # Messprotokoll
-# --------------------------------------------------
+# ==================================================
 st.markdown("---")
-st.subheader("📝 Digitales Messprotokoll")
+st.subheader("📝 Messprotokoll")
 
 col1, col2 = st.columns(2)
 
 with col1:
-    system = st.selectbox(
-        "Getestetes System:",
-        ["Bitte wählen...", "Pico-Tool", "SQuadriga II"]
-    )
+    system = st.selectbox("System:", ["Bitte wählen...", "Pico", "SQuadriga"])
 
 with col2:
-    timestamp = st.number_input(
-        "Signalverlust bei Sekunde (V2b):",
-        min_value=0.0,
-        max_value=60.0,
-        step=0.1
-    )
+    timestamp = st.number_input("Signalverlust (Sekunde)", 0.0, 120.0, 0.0, step=0.1)
 
-bemerkung = st.text_area("Besondere Auffälligkeiten / Notizen:")
+bemerkung = st.text_area("Notizen:")
 
-if st.button("Protokolleintrag speichern"):
+if st.button("Protokoll speichern"):
     if system != "Bitte wählen...":
-        st.success(f"Daten für {system} gespeichert ✅")
+        st.success("✅ Eintrag gespeichert")
     else:
-        st.error("Bitte System auswählen")
+        st.error("Bitte System wählen")
