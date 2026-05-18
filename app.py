@@ -1,6 +1,8 @@
-import streamlit as stimport streamlitimport numpy as np
+import streamlit as st
+import numpy as np
 import io
 import scipy.io.wavfile as wav
+
 
 st.set_page_config(page_title="NVH Signal Generator", layout="centered")
 st.title("🎛️ NVH Hardware-Validierung")
