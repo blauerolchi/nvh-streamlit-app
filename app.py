@@ -3,9 +3,12 @@ import numpy as np
 import io
 import scipy.io.wavfile as wav
 
+# --------------------------------------------------
+# UI Setup
+# --------------------------------------------------
 st.set_page_config(page_title="NVH Signal Generator", layout="centered")
 st.title("🎛️ NVH Hardware-Validierung")
-st.write("Signalgenerator mit synchronisierbaren Triggern für NVH-Messsysteme")
+st.write("Signalquelle mit synchronisierbaren Audio-Triggern (Start + Ende)")
 
 # --------------------------------------------------
 # Szenarien
@@ -19,6 +22,9 @@ SCENARIOS = [
 
 test_scenario = st.sidebar.radio("Wähle ein Messszenario:", SCENARIOS)
 
+# --------------------------------------------------
+# Konstanten
+# --------------------------------------------------
 SAMPLE_RATE = 44100
 
 # --------------------------------------------------
@@ -35,35 +41,45 @@ def generate_wav_bytes(signal):
     wav.write(byte_io, SAMPLE_RATE, signal_normalized)
     return byte_io.getvalue()
 
-
 # --------------------------------------------------
-# 🔥 TRIGGER GENERATOR
+# 🔊 3x BEEP TRIGGER
 # --------------------------------------------------
-def create_trigger():
+def create_beep_trigger(freq=2000):
     """
-    Erzeugt einen klaren, breitbandigen Impuls:
-    - eindeutig detektierbar
-    - robust gegenüber Filtern
+    3 klare Sinus-Pieptöne für Synchronisation
     """
-    trigger_length = int(0.01 * SAMPLE_RATE)  # 10 ms
 
-    # kurzer Breitband-Impuls
-    trigger = np.zeros(trigger_length)
-    trigger[:int(trigger_length/4)] = 1.0
-    trigger[int(trigger_length/4):int(trigger_length/2)] = -1.0
+    beep_duration = 0.05   # 50 ms
+    pause_duration = 0.05  # 50 ms
+
+    t = np.linspace(0, beep_duration, int(SAMPLE_RATE * beep_duration), endpoint=False)
+
+    # Sinus-Beep
+    beep = 0.9 * np.sin(2 * np.pi * freq * t)
+
+    # weiches Einschwingen (verhindert Klicks)
+    window = np.hanning(len(beep))
+    beep = beep * window
+
+    pause = np.zeros(int(SAMPLE_RATE * pause_duration))
+
+    trigger = np.concatenate([
+        beep, pause,
+        beep, pause,
+        beep
+    ])
 
     return trigger
 
-
+# --------------------------------------------------
+# Signalzusammenbau
+# --------------------------------------------------
 def assemble_signal(main_signal):
-    """
-    Kombiniert:
-    [START TRIGGER] + [PAUSE] + [SIGNAL] + [PAUSE] + [END TRIGGER]
-    """
-    pause = np.zeros(int(0.2 * SAMPLE_RATE))  # 200 ms Pause
 
-    start_trigger = create_trigger()
-    end_trigger = create_trigger()
+    pause = np.zeros(int(0.3 * SAMPLE_RATE))  # 300 ms Abstand
+
+    start_trigger = create_beep_trigger(2000)   # Start
+    end_trigger   = create_beep_trigger(3000)   # Ende (andere Frequenz!)
 
     full_signal = np.concatenate([
         start_trigger,
@@ -75,7 +91,9 @@ def assemble_signal(main_signal):
 
     return full_signal
 
-
+# --------------------------------------------------
+# UI Anzeige
+# --------------------------------------------------
 st.subheader(test_scenario)
 
 # ==================================================
@@ -83,7 +101,7 @@ st.subheader(test_scenario)
 # ==================================================
 if test_scenario == "V2a: Frequenz-Sweep":
 
-    st.write("Logarithmischer Sweep mit Start-/End-Trigger")
+    st.write("Logarithmischer Sweep mit Start-/End-Trigger (3x Beep)")
 
     duration = st.slider("Sweepdauer (Sekunden)", 10, 120, 60)
 
@@ -100,39 +118,37 @@ if test_scenario == "V2a: Frequenz-Sweep":
     full_signal = assemble_signal(signal)
 
     if st.button("▶️ Test starten"):
-        st.warning("⚠️ Beide Messsysteme müssen bereits aufnehmen!")
+        st.warning("⚠️ Messsysteme müssen bereits aufnehmen!")
         st.audio(generate_wav_bytes(full_signal), format="audio/wav")
-
 
 # ==================================================
 # V2b Pegeltest
 # ==================================================
 elif test_scenario == "V2b: Pegel-Stufentest":
 
-    st.write("Sinuston mit Triggern zur Synchronisierung")
+    st.write("Sinuston mit variabler Frequenz + Trigger")
 
     freq = st.slider("Frequenz (Hz)", 10, 20000, 550)
     duration = st.slider("Dauer (Sekunden)", 5, 60, 45)
 
     t = np.linspace(0, duration, SAMPLE_RATE * duration)
-    amplitude_envelope = np.linspace(1.0, 0.0, len(t))
+    envelope = np.linspace(1.0, 0.0, len(t))
 
-    signal = np.sin(2 * np.pi * freq * t) * amplitude_envelope
+    signal = np.sin(2 * np.pi * freq * t) * envelope
 
     full_signal = assemble_signal(signal)
 
     if st.button("▶️ Test starten"):
-        st.warning("⚠️ Messsysteme müssen vorab scharf geschaltet sein!")
+        st.warning("⚠️ Messsysteme vorher starten!")
         st.audio(generate_wav_bytes(full_signal), format="audio/wav")
         st.success(f"Frequenz: {freq} Hz")
-
 
 # ==================================================
 # V3 Clipping
 # ==================================================
 elif test_scenario == "V3: Clipping-Test":
 
-    st.write("Clipping-Impuls mit Triggern")
+    st.write("Impuls-Test mit Trigger")
 
     duration = 0.05
     signal = np.random.uniform(-1.0, 1.0, int(SAMPLE_RATE * duration))
@@ -142,13 +158,12 @@ elif test_scenario == "V3: Clipping-Test":
     if st.button("▶️ Test starten"):
         st.audio(generate_wav_bytes(full_signal), format="audio/wav")
 
-
 # ==================================================
 # V4 Rauschen
 # ==================================================
 elif test_scenario == "V4: Weißes Rauschen":
 
-    st.write("Weißes Rauschen mit Synchron-Triggern")
+    st.write("Weißes Rauschen mit Triggern")
 
     duration = st.slider("Dauer (Sekunden)", 5, 60, 15)
 
@@ -159,20 +174,25 @@ elif test_scenario == "V4: Weißes Rauschen":
     if st.button("▶️ Test starten"):
         st.audio(generate_wav_bytes(full_signal), format="audio/wav")
 
-
-# ==================================================
+# --------------------------------------------------
 # Messprotokoll
-# ==================================================
+# --------------------------------------------------
 st.markdown("---")
 st.subheader("📝 Messprotokoll")
 
 col1, col2 = st.columns(2)
 
 with col1:
-    system = st.selectbox("System:", ["Bitte wählen...", "Pico", "SQuadriga"])
+    system = st.selectbox(
+        "System:",
+        ["Bitte wählen...", "Pico", "SQuadriga"]
+    )
 
 with col2:
-    timestamp = st.number_input("Signalverlust (Sekunde)", 0.0, 120.0, 0.0, step=0.1)
+    timestamp = st.number_input(
+        "Signalverlust (Sekunde)",
+        0.0, 120.0, 0.0, step=0.1
+    )
 
 bemerkung = st.text_area("Notizen:")
 
