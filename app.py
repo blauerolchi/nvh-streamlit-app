@@ -47,15 +47,26 @@ if test_scenario == "V2a: Frequenz-Sweep":
     st.audio(audio_bytes, format="audio/wav")
 
 
-elif test_scenario == "V2b: Pegel-Stufentest (550 Hz)":
-    st.write("Ein 550 Hz Sinuston, der über 45 Sekunden kontinuierlich leiser wird.")
+elif test_scenario == "V2b: Pegel-Stufentest (frequenzvariabel)":
+    st.write("Ein Sinuston mit einstellbarer Frequenz, der über Zeit kontinuierlich leiser wird.")
+
+    # 🔹 Frequenz-Auswahl durch den Nutzer
+    freq = st.slider(
+        "Frequenz wählen (Hz)",
+        min_value=10,
+        max_value=20000,
+        value=550,
+        step=10
+    )
+
     duration = 45
     t = np.linspace(0, duration, SAMPLE_RATE * duration)
-    # Lineare Pegelrampe (Fade Out) von 1.0 auf 0.0
+
+    # Lineare Pegelrampe (Fade Out)
     amplitude_envelope = np.linspace(1.0, 0.0, len(t))
-    signal = np.sin(2 * np.pi * 550 * t) * amplitude_envelope
-    audio_bytes = generate_wav_bytes(signal)
-    st.audio(audio_bytes, format="audio/wav")
+
+    # Signal mit Nutzerfrequenz
+
 
 elif test_scenario == "V3: Clipping-Test (Impuls)":
     st.write("Extrem kurzer Breitband-Impuls bei maximaler digitaler Aussteuerung.")
