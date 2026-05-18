@@ -5,12 +5,9 @@ import scipy.io.wavfile as wav
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
 import datetime
 
-# --------------------------------------------------
 # CONFIG
-# --------------------------------------------------
 st.set_page_config(page_title="NVH Signal Lab", layout="wide")
 
 SAMPLE_RATE = 44100
@@ -22,9 +19,7 @@ SCENARIOS = {
     "V4": "Weißes Rauschen"
 }
 
-# --------------------------------------------------
 # AUDIO
-# --------------------------------------------------
 def generate_wav_bytes(signal):
     signal = np.clip(signal, -1.0, 1.0)
     buf = io.BytesIO()
@@ -47,9 +42,7 @@ def assemble_signal(main_signal):
         create_beep_trigger(3000)
     ])
 
-# --------------------------------------------------
 # METRICS
-# --------------------------------------------------
 def compute_metrics(signal):
     rms = float(np.sqrt(np.mean(signal**2)))
     peak = float(np.max(np.abs(signal)))
@@ -64,19 +57,15 @@ def compute_metrics(signal):
         "crest_db": 20*np.log10(crest) if crest > 0 else -120
     }
 
-# --------------------------------------------------
 # PLOT
-# --------------------------------------------------
 def make_plot(signal):
     fig = plt.figure(figsize=(10, 6))
     t = np.linspace(0, len(signal)/SAMPLE_RATE, len(signal))
 
-    # TIME
     plt.subplot(2,1,1)
     plt.plot(t, signal)
     plt.title("Zeitverlauf")
 
-    # FFT
     fft = np.abs(np.fft.rfft(signal))
     freqs = np.fft.rfftfreq(len(signal), 1/SAMPLE_RATE)
 
@@ -89,9 +78,7 @@ def make_plot(signal):
     plt.tight_layout()
     return fig
 
-# --------------------------------------------------
 # UI
-# --------------------------------------------------
 scenario = st.sidebar.radio("Szenario", list(SCENARIOS.keys()))
 
 st.title("🔬 NVH Signal Lab")
@@ -99,9 +86,7 @@ st.subheader(f"{scenario} – {SCENARIOS[scenario]}")
 
 signal = None
 
-# ==================================================
-# V2a SWEEP
-# ==================================================
+# V2a
 if scenario == "V2a":
     duration = st.slider("Dauer (s)", 10, 120, 30)
     t = np.linspace(0, duration, int(SAMPLE_RATE*duration))
@@ -114,9 +99,7 @@ if scenario == "V2a":
 
     signal = np.sin(phase)
 
-# ==================================================
-# V2b SINUS
-# ==================================================
+# V2b
 elif scenario == "V2b":
     freq = st.slider("Frequenz (Hz)", 10, 20000, 550)
     duration = st.slider("Dauer (s)", 5, 60, 15)
@@ -126,9 +109,7 @@ elif scenario == "V2b":
 
     signal = np.sin(2*np.pi*freq*t) * env
 
-# ==================================================
-# ✅ V3 NOISE BURST
-# ==================================================
+# V3
 elif scenario == "V3":
     pulses = st.slider("Impulse", 1, 20, 5)
     spacing = st.slider("Abstand (ms)", 10, 1000, 200)
@@ -149,16 +130,12 @@ elif scenario == "V3":
 
     signal = np.concatenate(parts)
 
-# ==================================================
-# V4 NOISE
-# ==================================================
+# V4
 elif scenario == "V4":
     duration = st.slider("Dauer (s)", 5, 60, 10)
     signal = np.random.uniform(-1,1,int(SAMPLE_RATE*duration))
 
-# --------------------------------------------------
 # OUTPUT
-# --------------------------------------------------
 if signal is not None:
 
     full = assemble_signal(signal)
