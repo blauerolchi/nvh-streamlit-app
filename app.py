@@ -26,14 +26,26 @@ def generate_wav_bytes(signal):
 
 st.subheader(test_scenario)
 
+
 if test_scenario == "V2a: Frequenz-Sweep":
-    st.write("Logarithmischer Frequenzdurchlauf von 20 Hz bis 20.000 Hz.")
-    duration = 30
+    st.write("Extremer logarithmischer Sweep von 0.5 Hz bis zur Nyquist-Grenze (~22 kHz).")
+
+    duration = 60  # länger für tiefe Frequenzen!
     t = np.linspace(0, duration, SAMPLE_RATE * duration)
-    # Logarithmischer Sweep
-    signal = np.sin(2 * np.pi * 20 * ((20000 / 20) ** (t / duration)))
+
+    f_start = 0.5
+    f_end = SAMPLE_RATE / 2 * 0.95  # Sicherheitsabstand zur Nyquist-Grenze
+
+    # logarithmischer Sweep (physikalisch korrekt integriert)
+    K = duration * np.log(f_end / f_start)
+    L = duration / np.log(f_end / f_start)
+
+    phase = 2 * np.pi * f_start * L * (np.exp(t / L) - 1)
+    signal = np.sin(phase)
+
     audio_bytes = generate_wav_bytes(signal)
     st.audio(audio_bytes, format="audio/wav")
+
 
 elif test_scenario == "V2b: Pegel-Stufentest (550 Hz)":
     st.write("Ein 550 Hz Sinuston, der über 45 Sekunden kontinuierlich leiser wird.")
