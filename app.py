@@ -2,11 +2,13 @@ import streamlit as st
 import numpy as np
 import io
 import scipy.io.wavfile as wav
+import scipy.signal as sg
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import datetime
+import gc
 
 st.set_page_config(page_title="NVH Signal Lab", page_icon="🔬",
                    layout="wide", initial_sidebar_state="expanded")
@@ -42,10 +44,9 @@ PLOT_STYLE = {"figure.facecolor": "#0d1117", "axes.facecolor": "#0d1117", "axes.
               "axes.labelcolor": "#8b949e", "axes.titlecolor": "#c9d1d9", "axes.grid": True,
               "grid.color": "#21262d", "grid.linewidth": 0.7, "xtick.color": "#6e7681", "ytick.color": "#6e7681",
               "xtick.labelsize": 8, "ytick.labelsize": 8, "axes.labelsize": 9, "axes.titlesize": 10,
-              "font.family": "monospace", "text.color": "#8b949e", "lines.linewidth": 1.2, "figure.dpi": 120}
+              "font.family": "monospace", "text.color": "#8b949e", "lines.linewidth": 1.2, "figure.dpi": 100} # DPI reduziert für Cloud-Stabilität
 
 def get_hann(N):
-    """Sicheres Hann-Fenster (Unabhängig von veralteten NumPy Versionen)"""
     if N <= 1: return np.ones(N)
     return 0.5 * (1 - np.cos(2 * np.pi * np.arange(N) / (N - 1)))
 
@@ -79,16 +80,15 @@ def make_science_figure(signal, title, extra_info, scenario_code):
     n, sr = len(signal), SAMPLE_RATE
     t = np.linspace(0, n/sr, n)
     
-    # FFT (volle Präzision für Berechnung)
+    # FFT Berechnung
     fft_vals = np.abs(np.fft.rfft(signal)) / n
     freqs = np.fft.rfftfreq(n, 1/sr)
     fft_db = 20 * np.log10(np.maximum(fft_vals, 1e-12))
     m = compute_metrics(signal)
     
-    # --- SPEICHER-OPTIMIERUNG FÜR STREAMLIT CLOUD ---
-    MAX_PLOT_PTS = 80000
+    # Aggressives Subsampling für Matplotlib Plotting (Cloud-OOM-Schutz)
+    MAX_PLOT_PTS = 20000 
     
-    # Zeitbereich
     if n > MAX_PLOT_PTS:
         step = n // MAX_PLOT_PTS
         t_plot = t[::step]
@@ -96,7 +96,6 @@ def make_science_figure(signal, title, extra_info, scenario_code):
     else:
         t_plot, sig_plot = t, signal
         
-    # Frequenzbereich
     valid = freqs > 0
     f_val, fft_val = freqs[valid], fft_db[valid]
     
@@ -107,11 +106,10 @@ def make_science_figure(signal, title, extra_info, scenario_code):
     else:
         f_plot, fft_plot = f_val, fft_val
         
-    # Spektrogramm dynamische Deckelung (Verhindert OOM-Crash!)
-    target_time_bins = 600
-    seg = max(256, n // target_time_bins)
+    # Spektrogramm Konfiguration
+    target_time_bins = 400
+    seg = max(512, n // target_time_bins)
     seg = min(4096, seg)
-    # ------------------------------------------------
     
     fig = plt.figure(figsize=(13, 8))
     fig.patch.set_facecolor("#0d1117")
@@ -124,6 +122,7 @@ def make_science_figure(signal, title, extra_info, scenario_code):
     
     ACCENT, GREEN, ORANGE = "#58a6ff", "#3fb950", "#d29922"
     
+    # Plot 1: Zeit
     ax_time.set_title("Zeitbereich / Time Domain", pad=6, color="#c9d1d9")
     ax_time.plot(t_plot, sig_plot, color=ACCENT, lw=0.6, alpha=0.85)
     ax_time.axhline(0, color="#30363d", lw=0.8, zorder=0)
@@ -138,6 +137,7 @@ def make_science_figure(signal, title, extra_info, scenario_code):
     ax_time.axhline(-rms, color=GREEN, lw=0.8, ls="--", alpha=0.7)
     ax_time.legend(fontsize=7, loc="upper right", framealpha=0.15)
     
+    # Plot 2: FFT
     ax_fft.set_title("Frequenzspektrum / Magnitude Spectrum", pad=6, color="#c9d1d9")
     ax_fft.plot(f_plot, fft_plot, color=ORANGE, lw=0.7)
     ax_fft.set_xscale("log")
@@ -148,16 +148,22 @@ def make_science_figure(signal, title, extra_info, scenario_code):
     ax_fft.set_ylabel("Magnitude [dBFS]")
     ax_fft.fill_between(f_plot, fft_plot, db_floor, color=ORANGE, alpha=0.06)
     
+    # Plot 3: Speichersicheres Spektrogramm via SciPy
     ax_spec.set_title("Spektrogramm / STFT", pad=6, color="#c9d1d9")
     try:
-        ax_spec.specgram(signal, NFFT=seg, Fs=sr, noverlap=seg//2, cmap="inferno", scale="dB", vmin=-120, vmax=0)
+        f_spec, t_spec, Sxx = sg.spectrogram(signal, fs=sr, nperseg=seg, noverlap=seg//2)
+        Sxx_db = 10 * np.log10(np.maximum(Sxx, 1e-12))
+        
+        # rasterized=True ist hier essenziell um riesige SVG/PDF Puffer zu vermeiden
+        ax_spec.pcolormesh(t_spec, f_spec, Sxx_db, cmap="inferno", vmin=-120, vmax=0, rasterized=True, shading='nearest')
         ax_spec.set_xlabel("Zeit [s]")
         ax_spec.set_ylabel("Frequenz [Hz]")
         ax_spec.set_yscale("log")
         ax_spec.set_ylim(20, sr/2)
-    except Exception:
-        ax_spec.text(0.5, 0.5, "Signal zu kurz", ha="center", va="center", color="#6e7681", transform=ax_spec.transAxes)
+    except Exception as e:
+        ax_spec.text(0.5, 0.5, "Signal zu kurz für Spektrogramm", ha="center", va="center", color="#6e7681", transform=ax_spec.transAxes)
         
+    # Info Panel
     ax_info.set_axis_off()
     info_lines = [("SZENARIO", scenario_code), ("", title), ("SEP", ""),
                   ("Abtastrate", f"{sr:,} Hz"), ("Samples", f"{m['n_samples']:,}"),
@@ -169,7 +175,7 @@ def make_science_figure(signal, title, extra_info, scenario_code):
     for k, v in extra_info.items():
         info_lines.append((k, str(v)))
         
-    info_lines += [("", ""), ("SEP", ""), ("Erstellt", datetime.datetime.now().strftime("%Y-%m-%d")), ("Version", "NVH Signal Lab v2.1")]
+    info_lines += [("", ""), ("SEP", ""), ("Erstellt", datetime.datetime.now().strftime("%Y-%m-%d")), ("Version", "NVH Signal Lab v2.2")]
     y = 0.97
     
     for label, value in info_lines:
@@ -191,7 +197,7 @@ def make_science_figure(signal, title, extra_info, scenario_code):
 
 def fig_to_png(fig):
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor="#0d1117", edgecolor="none")
+    fig.savefig(buf, format="png", bbox_inches="tight", facecolor="#0d1117", edgecolor="none")
     buf.seek(0)
     return buf.getvalue()
 
@@ -248,7 +254,7 @@ with col_params:
         amplitude = st.slider("Amplitude", 0.1, 1.0, 1.0)
         params = dict(duration=duration, amplitude=amplitude)
     
-    do_run = st.button("▶  Signal generieren & abspielen", use_container_width=True, type="primary")
+    do_run = st.button("▶  Signal generieren & abspielen", type="primary")
 
 # SIGNAL GENERATION
 if do_run:
@@ -313,19 +319,19 @@ with col_data:
         show_metrics(m)
         st.markdown('<div class="section-title">Signalanalyse</div>', unsafe_allow_html=True)
         
-        # WICHTIG: Die Grafik nur genau EINMAL rendern, um RAM zu schonen
+        # 1. Einmal rendern, RAM sparen!
         fig = make_science_figure(fs_signal, st_title, ei, sc)
-        
-        st.pyplot(fig) 
-        
-        # PNG aus der ohnehin berechneten Figure erzeugen
         png_bytes = fig_to_png(fig)
         
-        # Rigoros den Arbeitsspeicher des Servers freigeben!
+        # 2. Bild als echtes Bild anzeigen statt st.pyplot() zu nutzen
+        st.image(png_bytes)
+        
+        # 3. Speichern bereinigen (Verhindert das Volllaufen des Servers)
         fig.clear()
         plt.close('all')
+        gc.collect() 
         
-        st.download_button("⬇  Abbildung als PNG exportieren", data=png_bytes, file_name=f"NVH_{sc}_{ts}.png", mime="image/png", use_container_width=True)
+        st.download_button("⬇  Abbildung als PNG exportieren", data=png_bytes, file_name=f"NVH_{sc}_{ts}.png", mime="image/png")
         
         st.markdown('<div class="section-title" style="margin-top:1rem">Audioausgabe</div>', unsafe_allow_html=True)
         if sc == "V3":
@@ -333,7 +339,7 @@ with col_data:
             
         wav_b = generate_wav_bytes(fs_signal)
         st.audio(wav_b, format="audio/wav")
-        st.download_button("⬇  WAV-Datei herunterladen", data=wav_b, file_name=f"NVH_{sc}_{ts}.wav", mime="audio/wav", use_container_width=True)
+        st.download_button("⬇  WAV-Datei herunterladen", data=wav_b, file_name=f"NVH_{sc}_{ts}.wav", mime="audio/wav")
 
 # PROTOCOL
 st.markdown("---")
@@ -352,4 +358,4 @@ if st.button("Protokoll speichern"):
     else:
         st.error("Bitte zuerst ein Messsystem auswählen.")
         
-st.markdown(f"<div style='text-align:center;margin-top:3rem;padding-top:1.5rem;border-top:1px solid #21262d;font-family:\"IBM Plex Mono\",monospace;font-size:0.68rem;color:#6e7681;'>NVH Signal Lab v2.1  ·  fs = {SAMPLE_RATE:,} Hz  ·  16-bit PCM  ·  {datetime.datetime.now().strftime('%Y')}</div>", unsafe_allow_html=True)
+st.markdown(f"<div style='text-align:center;margin-top:3rem;padding-top:1.5rem;border-top:1px solid #21262d;font-family:\"IBM Plex Mono\",monospace;font-size:0.68rem;color:#6e7681;'>NVH Signal Lab v2.2  ·  fs = {SAMPLE_RATE:,} Hz  ·  16-bit PCM  ·  {datetime.datetime.now().strftime('%Y')}</div>", unsafe_allow_html=True)
