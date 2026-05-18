@@ -414,9 +414,9 @@ def make_science_figure(signal, title, extra_info: dict, scenario_code: str):
     y = 0.97
     for label, value in info_lines:
         if label.startswith("─"):
-            ax_info.axhline(y=y, xmin=0.02, xmax=0.98,
-                            color="#21262d", lw=0.7,
-                            transform=ax_info.transAxes)
+            ax_info.plot([0.02, 0.98], [y, y],
+                         color="#21262d", lw=0.7,
+                         transform=ax_info.transAxes, clip_on=False)
             y -= 0.025
             continue
         if label == "":
