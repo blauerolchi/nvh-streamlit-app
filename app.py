@@ -499,7 +499,7 @@ with col_params:
             "Amplitude": f"{amplitude:.2f}",
         }
 
-    do_run = st.button("▶  Signal abspielen", use_container_width=True, type="primary")
+    do_run = st.button("▶  Signal abspielen", width="stretch", type="primary")
 
 # ==================================================
 # DATA COLUMN
@@ -516,7 +516,7 @@ with col_data:
                     unsafe_allow_html=True)
 
         fig = make_science_figure(full_signal, scenario_title, extra_info, selected_code)
-        st.pyplot(fig, use_container_width=True)
+        st.pyplot(fig)
         plt.close(fig)
 
         # PNG Export
@@ -531,7 +531,7 @@ with col_data:
             data=png_bytes,
             file_name=fname,
             mime="image/png",
-            use_container_width=True,
+            width="stretch",
         )
 
         # Audio
@@ -548,7 +548,7 @@ with col_data:
                 data=wav_bytes,
                 file_name=f"NVH_{selected_code}_{ts}.wav",
                 mime="audio/wav",
-                use_container_width=True,
+                width="stretch",
             )
 
 # ==================================================
