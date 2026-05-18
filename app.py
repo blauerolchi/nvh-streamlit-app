@@ -499,14 +499,27 @@ with col_params:
             "Amplitude": f"{amplitude:.2f}",
         }
 
-    do_run = st.button("▶  Signal abspielen", use_container_width=True, type="primary")
+    do_run = st.button("▶  Signal generieren & abspielen", use_container_width=True, type="primary")
 
 # ==================================================
 # DATA COLUMN
 # ==================================================
 with col_data:
-    if full_signal is not None:
-        metrics = compute_metrics(full_signal)
+    if do_run and full_signal is not None:
+        st.session_state["full_signal"]    = full_signal
+        st.session_state["extra_info"]     = extra_info
+        st.session_state["scenario_title"] = scenario_title
+        st.session_state["selected_code"]  = selected_code
+        st.session_state["ts"]             = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    if "full_signal" in st.session_state:
+        fs  = st.session_state["full_signal"]
+        ei  = st.session_state["extra_info"]
+        st_ = st.session_state["scenario_title"]
+        sc  = st.session_state["selected_code"]
+        ts  = st.session_state["ts"]
+
+        metrics = compute_metrics(fs)
 
         st.markdown('<div class="section-title">Wissenschaftliche Kennwerte</div>',
                     unsafe_allow_html=True)
@@ -515,17 +528,15 @@ with col_data:
         st.markdown('<div class="section-title">Signalanalyse</div>',
                     unsafe_allow_html=True)
 
-        fig = make_science_figure(full_signal, scenario_title, extra_info, selected_code)
+        fig = make_science_figure(fs, st_, ei, sc)
         st.pyplot(fig)
         plt.close(fig)
 
-        # PNG Export
-        fig_export = make_science_figure(full_signal, scenario_title, extra_info, selected_code)
+        fig_export = make_science_figure(fs, st_, ei, sc)
         png_bytes  = fig_to_png_bytes(fig_export)
         plt.close(fig_export)
 
-        ts    = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        fname = f"NVH_{selected_code}_{ts}.png"
+        fname = f"NVH_{sc}_{ts}.png"
         st.download_button(
             label="⬇  Abbildung als PNG exportieren",
             data=png_bytes,
@@ -534,22 +545,31 @@ with col_data:
             use_container_width=True,
         )
 
-        # Audio
-        if do_run:
-            st.markdown('<div class="section-title" style="margin-top:1rem">Audioausgabe</div>',
+        st.markdown('<div class="section-title" style="margin-top:1rem">Audioausgabe</div>',
+                    unsafe_allow_html=True)
+        if sc == "V3":
+            st.markdown('<div class="warn-banner">⚠  Sehr laut — Kopfhörer-Lautstärke reduzieren!</div>',
                         unsafe_allow_html=True)
-            if selected_code == "V3":
-                st.markdown('<div class="warn-banner">⚠  Sehr laut — Kopfhörer-Lautstärke reduzieren!</div>',
-                            unsafe_allow_html=True)
-            wav_bytes = generate_wav_bytes(full_signal)
-            st.audio(wav_bytes, format="audio/wav")
-            st.download_button(
-                label="⬇  WAV-Datei herunterladen",
-                data=wav_bytes,
-                file_name=f"NVH_{selected_code}_{ts}.wav",
-                mime="audio/wav",
-                use_container_width=True,
-            )
+        wav_bytes = generate_wav_bytes(fs)
+        st.audio(wav_bytes, format="audio/wav")
+        st.download_button(
+            label="⬇  WAV-Datei herunterladen",
+            data=wav_bytes,
+            file_name=f"NVH_{sc}_{ts}.wav",
+            mime="audio/wav",
+            use_container_width=True,
+        )
+    else:
+        st.markdown("""
+        <div style='display:flex;align-items:center;justify-content:center;
+                    height:300px;border:1px dashed #21262d;border-radius:10px;
+                    flex-direction:column;gap:0.8rem;'>
+            <div style='font-size:2rem;color:#21262d;'>⚡</div>
+            <div style='font-family:"IBM Plex Mono",monospace;font-size:0.8rem;color:#6e7681;'>
+                Parameter wählen → Signal generieren
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
 # ==================================================
 # PROTOCOL
