@@ -44,6 +44,11 @@ PLOT_STYLE = {"figure.facecolor": "#0d1117", "axes.facecolor": "#0d1117", "axes.
               "xtick.labelsize": 8, "ytick.labelsize": 8, "axes.labelsize": 9, "axes.titlesize": 10,
               "font.family": "monospace", "text.color": "#8b949e", "lines.linewidth": 1.2, "figure.dpi": 120}
 
+def get_hann(N):
+    """Sicheres Hann-Fenster (Unabhängig von veralteten NumPy Versionen)"""
+    if N <= 1: return np.ones(N)
+    return 0.5 * (1 - np.cos(2 * np.pi * np.arange(N) / (N - 1)))
+
 def generate_wav_bytes(signal):
     signal = np.clip(signal, -1.0, 1.0)
     buf = io.BytesIO()
@@ -52,7 +57,7 @@ def generate_wav_bytes(signal):
 
 def create_beep_trigger(freq):
     t = np.linspace(0, 0.05, int(SAMPLE_RATE * 0.05), endpoint=False)
-    beep = 0.9 * np.sin(2 * np.pi * freq * t) * np.hanning(len(t))
+    beep = 0.9 * np.sin(2 * np.pi * freq * t) * get_hann(len(t))
     pause = np.zeros(int(SAMPLE_RATE * 0.05))
     return np.concatenate([beep, pause, beep, pause, beep])
 
@@ -74,38 +79,39 @@ def make_science_figure(signal, title, extra_info, scenario_code):
     n, sr = len(signal), SAMPLE_RATE
     t = np.linspace(0, n/sr, n)
     
-    # Berechnungen für FFT in voller Präzision
+    # FFT (volle Präzision für Berechnung)
     fft_vals = np.abs(np.fft.rfft(signal)) / n
     freqs = np.fft.rfftfreq(n, 1/sr)
     fft_db = 20 * np.log10(np.maximum(fft_vals, 1e-12))
-    seg = min(2048, max(64, n//8))
     m = compute_metrics(signal)
     
-    # --- SPEICHER-OPTIMIERUNG (OOM-Crash-Verhinderung) ---
-    # Wir dezimieren das Signal rein für die optische Darstellung im Plot, 
-    # falls es größer als 100.000 Punkte ist, was dem Arbeitsspeicher-Limit der Cloud entgegenwirkt.
-    MAX_PLOT_PTS = 100000
+    # --- SPEICHER-OPTIMIERUNG FÜR STREAMLIT CLOUD ---
+    MAX_PLOT_PTS = 80000
     
+    # Zeitbereich
     if n > MAX_PLOT_PTS:
         step = n // MAX_PLOT_PTS
         t_plot = t[::step]
         sig_plot = signal[::step]
     else:
-        t_plot = t
-        sig_plot = signal
+        t_plot, sig_plot = t, signal
         
+    # Frequenzbereich
     valid = freqs > 0
-    freqs_valid = freqs[valid]
-    fft_db_valid = fft_db[valid]
+    f_val, fft_val = freqs[valid], fft_db[valid]
     
-    if len(freqs_valid) > MAX_PLOT_PTS:
-        step_fft = len(freqs_valid) // MAX_PLOT_PTS
-        f_plot = freqs_valid[::step_fft]
-        fft_plot = fft_db_valid[::step_fft]
+    if len(f_val) > MAX_PLOT_PTS:
+        step_fft = len(f_val) // MAX_PLOT_PTS
+        f_plot = f_val[::step_fft]
+        fft_plot = fft_val[::step_fft]
     else:
-        f_plot = freqs_valid
-        fft_plot = fft_db_valid
-    # ----------------------------------------------------
+        f_plot, fft_plot = f_val, fft_val
+        
+    # Spektrogramm dynamische Deckelung (Verhindert OOM-Crash!)
+    target_time_bins = 600
+    seg = max(256, n // target_time_bins)
+    seg = min(4096, seg)
+    # ------------------------------------------------
     
     fig = plt.figure(figsize=(13, 8))
     fig.patch.set_facecolor("#0d1117")
@@ -118,7 +124,6 @@ def make_science_figure(signal, title, extra_info, scenario_code):
     
     ACCENT, GREEN, ORANGE = "#58a6ff", "#3fb950", "#d29922"
     
-    # Render Zeitbereich mit reduzierter Punktdichte
     ax_time.set_title("Zeitbereich / Time Domain", pad=6, color="#c9d1d9")
     ax_time.plot(t_plot, sig_plot, color=ACCENT, lw=0.6, alpha=0.85)
     ax_time.axhline(0, color="#30363d", lw=0.8, zorder=0)
@@ -133,7 +138,6 @@ def make_science_figure(signal, title, extra_info, scenario_code):
     ax_time.axhline(-rms, color=GREEN, lw=0.8, ls="--", alpha=0.7)
     ax_time.legend(fontsize=7, loc="upper right", framealpha=0.15)
     
-    # Render FFT mit reduzierter Punktdichte
     ax_fft.set_title("Frequenzspektrum / Magnitude Spectrum", pad=6, color="#c9d1d9")
     ax_fft.plot(f_plot, fft_plot, color=ORANGE, lw=0.7)
     ax_fft.set_xscale("log")
@@ -170,7 +174,6 @@ def make_science_figure(signal, title, extra_info, scenario_code):
     
     for label, value in info_lines:
         if label == "SEP":
-            # WICHTIG: plot verwenden für saubere Trennlinien, axhline produziert hier Fehler aufgrund von transform.
             ax_info.plot([0.02, 0.98], [y, y], color="#21262d", lw=0.7, transform=ax_info.transAxes, clip_on=False)
             y -= 0.025
             continue
@@ -220,7 +223,7 @@ st.markdown(f"""<div class="scenario-card"><div class="scenario-label">Aktives S
 
 col_params, col_data = st.columns([1, 2], gap="large")
 
-# PARAMETERS - UI only, zero computation
+# PARAMETERS
 with col_params:
     st.markdown('<div class="section-title">Parameter</div>', unsafe_allow_html=True)
     if selected_code == "V2a":
@@ -244,9 +247,10 @@ with col_params:
         duration = st.slider("Dauer (s)", 5, 60, 10)
         amplitude = st.slider("Amplitude", 0.1, 1.0, 1.0)
         params = dict(duration=duration, amplitude=amplitude)
+    
     do_run = st.button("▶  Signal generieren & abspielen", use_container_width=True, type="primary")
 
-# SIGNAL GENERATION - only on button press
+# SIGNAL GENERATION
 if do_run:
     sr = SAMPLE_RATE
     if selected_code == "V2a":
@@ -274,7 +278,7 @@ if do_run:
         np_, ps, amp, bm = params["num_pulses"], params["pulse_spacing"], params["amplitude"], params["burst_ms"]
         sb = int(sr * bm / 1000)
         sp = int(sr * ps / 1000)
-        pulse = amp * np.random.uniform(-1.0, 1.0, sb) * np.hanning(sb)
+        pulse = amp * np.random.uniform(-1.0, 1.0, sb) * get_hann(sb)
         parts = []
         for i in range(np_):
             parts.append(pulse)
@@ -309,13 +313,18 @@ with col_data:
         show_metrics(m)
         st.markdown('<div class="section-title">Signalanalyse</div>', unsafe_allow_html=True)
         
+        # WICHTIG: Die Grafik nur genau EINMAL rendern, um RAM zu schonen
         fig = make_science_figure(fs_signal, st_title, ei, sc)
-        st.pyplot(fig)  # Ohne use_container_width=True, um den Deprecation-Fehler zu vermeiden
-        plt.close(fig)
         
-        fig2 = make_science_figure(fs_signal, st_title, ei, sc)
-        png_bytes = fig_to_png(fig2)
-        plt.close(fig2)
+        st.pyplot(fig) 
+        
+        # PNG aus der ohnehin berechneten Figure erzeugen
+        png_bytes = fig_to_png(fig)
+        
+        # Rigoros den Arbeitsspeicher des Servers freigeben!
+        fig.clear()
+        plt.close('all')
+        
         st.download_button("⬇  Abbildung als PNG exportieren", data=png_bytes, file_name=f"NVH_{sc}_{ts}.png", mime="image/png", use_container_width=True)
         
         st.markdown('<div class="section-title" style="margin-top:1rem">Audioausgabe</div>', unsafe_allow_html=True)
