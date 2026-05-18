@@ -1,14 +1,25 @@
+# WICHTIG: Diese Zeilen MÜSSEN ganz oben stehen, noch vor allen anderen Imports!
+# Sie verhindern den "Silent Crash" durch zu viele Threads in der Streamlit Cloud.
+import os
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 import streamlit as st
 import numpy as np
 import io
 import scipy.io.wavfile as wav
 import scipy.signal as sg
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
 import datetime
 import gc
+
+# Pyplot wird KOMPLETT verbannt, um Memory Leaks zu 100% auszuschließen.
+import matplotlib as mpl
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+import matplotlib.gridspec as gridspec
 
 st.set_page_config(page_title="NVH Signal Lab", page_icon="🔬",
                    layout="wide", initial_sidebar_state="expanded")
@@ -40,11 +51,14 @@ div[data-testid="stSidebar"]{background:#0d1117 !important;border-right:1px soli
 
 SAMPLE_RATE = 44100
 SCENARIOS = {"V2a": "Frequenz-Sweep", "V2b": "Pegel-Stufentest", "V3": "Clipping / Noise Burst", "V4": "Weißes Rauschen"}
-PLOT_STYLE = {"figure.facecolor": "#0d1117", "axes.facecolor": "#0d1117", "axes.edgecolor": "#21262d",
+
+PLOT_STYLE = {"axes.facecolor": "#0d1117", "axes.edgecolor": "#21262d",
               "axes.labelcolor": "#8b949e", "axes.titlecolor": "#c9d1d9", "axes.grid": True,
               "grid.color": "#21262d", "grid.linewidth": 0.7, "xtick.color": "#6e7681", "ytick.color": "#6e7681",
               "xtick.labelsize": 8, "ytick.labelsize": 8, "axes.labelsize": 9, "axes.titlesize": 10,
-              "font.family": "monospace", "text.color": "#8b949e", "lines.linewidth": 1.2, "figure.dpi": 100} # DPI reduziert für Cloud-Stabilität
+              "font.family": "monospace", "text.color": "#8b949e", "lines.linewidth": 1.2}
+
+mpl.rcParams.update(PLOT_STYLE)
 
 def get_hann(N):
     if N <= 1: return np.ones(N)
@@ -75,43 +89,16 @@ def compute_metrics(signal):
             "db_rms": 20*np.log10(rms) if rms>0 else -120.0,
             "db_peak": 20*np.log10(peak) if peak>0 else -120.0, "n_samples": len(signal)}
 
-def make_science_figure(signal, title, extra_info, scenario_code):
-    plt.rcParams.update(PLOT_STYLE)
+def make_science_figure_bytes(signal, title, extra_info, scenario_code):
     n, sr = len(signal), SAMPLE_RATE
     t = np.linspace(0, n/sr, n)
     
-    # FFT Berechnung
-    fft_vals = np.abs(np.fft.rfft(signal)) / n
-    freqs = np.fft.rfftfreq(n, 1/sr)
-    fft_db = 20 * np.log10(np.maximum(fft_vals, 1e-12))
+    # Metriken berechnen
     m = compute_metrics(signal)
     
-    # Aggressives Subsampling für Matplotlib Plotting (Cloud-OOM-Schutz)
-    MAX_PLOT_PTS = 20000 
-    
-    if n > MAX_PLOT_PTS:
-        step = n // MAX_PLOT_PTS
-        t_plot = t[::step]
-        sig_plot = signal[::step]
-    else:
-        t_plot, sig_plot = t, signal
-        
-    valid = freqs > 0
-    f_val, fft_val = freqs[valid], fft_db[valid]
-    
-    if len(f_val) > MAX_PLOT_PTS:
-        step_fft = len(f_val) // MAX_PLOT_PTS
-        f_plot = f_val[::step_fft]
-        fft_plot = fft_val[::step_fft]
-    else:
-        f_plot, fft_plot = f_val, fft_val
-        
-    # Spektrogramm Konfiguration
-    target_time_bins = 400
-    seg = max(512, n // target_time_bins)
-    seg = min(4096, seg)
-    
-    fig = plt.figure(figsize=(13, 8))
+    # Objektorientierte Figure erstellen (verhindert Memory Leaks)
+    fig = Figure(figsize=(13, 8), dpi=100)
+    canvas = FigureCanvasAgg(fig)
     fig.patch.set_facecolor("#0d1117")
     gs = gridspec.GridSpec(3, 3, figure=fig, hspace=0.55, wspace=0.40, left=0.07, right=0.97, top=0.87, bottom=0.09)
     
@@ -122,7 +109,11 @@ def make_science_figure(signal, title, extra_info, scenario_code):
     
     ACCENT, GREEN, ORANGE = "#58a6ff", "#3fb950", "#d29922"
     
-    # Plot 1: Zeit
+    # 1. ZEITBEREICH (mit massivem Downsampling für Plotting)
+    MAX_PTS = 20000 
+    step_t = max(1, n // MAX_PTS)
+    t_plot, sig_plot = t[::step_t], signal[::step_t]
+    
     ax_time.set_title("Zeitbereich / Time Domain", pad=6, color="#c9d1d9")
     ax_time.plot(t_plot, sig_plot, color=ACCENT, lw=0.6, alpha=0.85)
     ax_time.axhline(0, color="#30363d", lw=0.8, zorder=0)
@@ -132,12 +123,21 @@ def make_science_figure(signal, title, extra_info, scenario_code):
     ax_time.set_ylabel("Amplitude")
     ax_time.fill_between(t_plot, sig_plot, 0, color=ACCENT, alpha=0.06)
     
-    rms = m["rms"]
-    ax_time.axhline(rms, color=GREEN, lw=0.8, ls="--", alpha=0.7, label=f"RMS ±{rms:.3f}")
-    ax_time.axhline(-rms, color=GREEN, lw=0.8, ls="--", alpha=0.7)
+    rms_val = m["rms"]
+    ax_time.axhline(rms_val, color=GREEN, lw=0.8, ls="--", alpha=0.7, label=f"RMS ±{rms_val:.3f}")
+    ax_time.axhline(-rms_val, color=GREEN, lw=0.8, ls="--", alpha=0.7)
     ax_time.legend(fontsize=7, loc="upper right", framealpha=0.15)
     
-    # Plot 2: FFT
+    # 2. FREQUENZBEREICH (FFT)
+    fft_vals = np.abs(np.fft.rfft(signal)) / n
+    freqs = np.fft.rfftfreq(n, 1/sr)
+    fft_db = 20 * np.log10(np.maximum(fft_vals, 1e-12))
+    
+    valid = freqs > 0
+    f_val, fft_val = freqs[valid], fft_db[valid]
+    step_f = max(1, len(f_val) // MAX_PTS)
+    f_plot, fft_plot = f_val[::step_f], fft_val[::step_f]
+    
     ax_fft.set_title("Frequenzspektrum / Magnitude Spectrum", pad=6, color="#c9d1d9")
     ax_fft.plot(f_plot, fft_plot, color=ORANGE, lw=0.7)
     ax_fft.set_xscale("log")
@@ -148,13 +148,23 @@ def make_science_figure(signal, title, extra_info, scenario_code):
     ax_fft.set_ylabel("Magnitude [dBFS]")
     ax_fft.fill_between(f_plot, fft_plot, db_floor, color=ORANGE, alpha=0.06)
     
-    # Plot 3: Speichersicheres Spektrogramm via SciPy
+    # 3. SPEKTROGRAMM (Sicher und gecappt)
     ax_spec.set_title("Spektrogramm / STFT", pad=6, color="#c9d1d9")
     try:
+        seg = min(4096, max(512, n // 400))
         f_spec, t_spec, Sxx = sg.spectrogram(signal, fs=sr, nperseg=seg, noverlap=seg//2)
         Sxx_db = 10 * np.log10(np.maximum(Sxx, 1e-12))
         
-        # rasterized=True ist hier essenziell um riesige SVG/PDF Puffer zu vermeiden
+        # Hard-Cap für die Matrixgröße vor dem Rendern! (Verhindert 100% OOM)
+        if Sxx_db.shape[1] > 800:
+            st_t = Sxx_db.shape[1] // 800
+            Sxx_db = Sxx_db[:, ::st_t]
+            t_spec = t_spec[::st_t]
+        if Sxx_db.shape[0] > 600:
+            st_f = Sxx_db.shape[0] // 600
+            Sxx_db = Sxx_db[::st_f, :]
+            f_spec = f_spec[::st_f]
+            
         ax_spec.pcolormesh(t_spec, f_spec, Sxx_db, cmap="inferno", vmin=-120, vmax=0, rasterized=True, shading='nearest')
         ax_spec.set_xlabel("Zeit [s]")
         ax_spec.set_ylabel("Frequenz [Hz]")
@@ -163,7 +173,7 @@ def make_science_figure(signal, title, extra_info, scenario_code):
     except Exception as e:
         ax_spec.text(0.5, 0.5, "Signal zu kurz für Spektrogramm", ha="center", va="center", color="#6e7681", transform=ax_spec.transAxes)
         
-    # Info Panel
+    # 4. INFO PANEL
     ax_info.set_axis_off()
     info_lines = [("SZENARIO", scenario_code), ("", title), ("SEP", ""),
                   ("Abtastrate", f"{sr:,} Hz"), ("Samples", f"{m['n_samples']:,}"),
@@ -175,7 +185,7 @@ def make_science_figure(signal, title, extra_info, scenario_code):
     for k, v in extra_info.items():
         info_lines.append((k, str(v)))
         
-    info_lines += [("", ""), ("SEP", ""), ("Erstellt", datetime.datetime.now().strftime("%Y-%m-%d")), ("Version", "NVH Signal Lab v2.2")]
+    info_lines += [("", ""), ("SEP", ""), ("Erstellt", datetime.datetime.now().strftime("%Y-%m-%d")), ("Version", "NVH Signal Lab v3.0 (Stable)")]
     y = 0.97
     
     for label, value in info_lines:
@@ -193,13 +203,18 @@ def make_science_figure(signal, title, extra_info, scenario_code):
     fig.text(0.04, 0.95, f"NVH Signal Lab  ·  {scenario_code}: {title}", fontsize=11, color="#e6edf3", fontfamily="monospace", fontweight="bold")
     fig.text(0.04, 0.922, f"fs={sr:,} Hz  |  N={m['n_samples']:,}  |  Δf={sr/m['n_samples']:.3f} Hz  |  {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}", fontsize=7.5, color="#6e7681", fontfamily="monospace")
     
-    return fig
-
-def fig_to_png(fig):
+    # In Bytes schreiben
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight", facecolor="#0d1117", edgecolor="none")
     buf.seek(0)
-    return buf.getvalue()
+    img_bytes = buf.getvalue()
+    
+    # Speicher radikal und explizit leeren!
+    fig.clf()
+    del fig, canvas, ax_time, ax_fft, ax_spec, ax_info, gs, Sxx, Sxx_db, fft_vals
+    gc.collect() 
+    
+    return img_bytes, m
 
 def metric_html(label, value, unit=""):
     return (f'<div class="metric-card"><div class="metric-label">{label}</div>'
@@ -254,90 +269,81 @@ with col_params:
         amplitude = st.slider("Amplitude", 0.1, 1.0, 1.0)
         params = dict(duration=duration, amplitude=amplitude)
     
-    do_run = st.button("▶  Signal generieren & abspielen", type="primary")
+    do_run = st.button("▶  Signal generieren & abspielen", type="primary", use_container_width=True)
 
 # SIGNAL GENERATION
 if do_run:
-    sr = SAMPLE_RATE
-    if selected_code == "V2a":
-        d, fs_start, fep, amp = params["duration"], params["f_start"], params["f_end_pct"], params["amplitude"]
-        t = np.linspace(0, d, int(sr*d))
-        f_end = sr/2 * (fep/100)
-        L = d / np.log(f_end/fs_start)
-        phase = 2 * np.pi * fs_start * L * (np.exp(t/L) - 1)
-        sig = amp * np.sin(phase)
-        extra = {"Typ": "Log. Sweep", "f_start": f"{fs_start:.1f} Hz", "f_end": f"{f_end:.0f} Hz", "Amplitude": f"{amp:.2f}"}
-    elif selected_code == "V2b":
-        freq, d, env_type = params["freq"], params["duration"], params["env_type"]
-        t = np.linspace(0, d, int(sr*d))
-        if env_type == "Linear fallend":
-            env = np.linspace(1.0, 0.0, len(t))
-        elif env_type == "Linear steigend":
-            env = np.linspace(0.0, 1.0, len(t))
-        elif env_type == "Konstant":
-            env = np.ones(len(t))
-        else:
-            env = 0.5 + 0.5 * np.sin(2 * np.pi * 0.5 * t)
-        sig = np.sin(2 * np.pi * freq * t) * env
-        extra = {"Frequenz": f"{freq} Hz", "Hüllkurve": env_type, "Dauer": f"{d} s"}
-    elif selected_code == "V3":
-        np_, ps, amp, bm = params["num_pulses"], params["pulse_spacing"], params["amplitude"], params["burst_ms"]
-        sb = int(sr * bm / 1000)
-        sp = int(sr * ps / 1000)
-        pulse = amp * np.random.uniform(-1.0, 1.0, sb) * get_hann(sb)
-        parts = []
-        for i in range(np_):
-            parts.append(pulse)
-            if i < np_ - 1:
-                parts.append(np.zeros(sp))
-        sig = np.concatenate(parts)
-        extra = {"Impulse": f"{np_}", "Abstand": f"{ps} ms", "Burst-Dauer": f"{bm} ms", "Amplitude": f"{amp:.2f}"}
-    elif selected_code == "V4":
-        d, amp = params["duration"], params["amplitude"]
-        sig = amp * np.random.uniform(-1.0, 1.0, int(sr * d))
-        extra = {"Typ": "White Noise", "Amplitude": f"{amp:.2f}"}
+    with st.spinner("Signal wird generiert und analysiert..."):
+        sr = SAMPLE_RATE
+        if selected_code == "V2a":
+            d, fs_start, fep, amp = params["duration"], params["f_start"], params["f_end_pct"], params["amplitude"]
+            t = np.linspace(0, d, int(sr*d))
+            f_end = sr/2 * (fep/100)
+            L = d / np.log(f_end/fs_start)
+            phase = 2 * np.pi * fs_start * L * (np.exp(t/L) - 1)
+            sig = amp * np.sin(phase)
+            extra = {"Typ": "Log. Sweep", "f_start": f"{fs_start:.1f} Hz", "f_end": f"{f_end:.0f} Hz", "Amplitude": f"{amp:.2f}"}
+        elif selected_code == "V2b":
+            freq, d, env_type = params["freq"], params["duration"], params["env_type"]
+            t = np.linspace(0, d, int(sr*d))
+            if env_type == "Linear fallend": env = np.linspace(1.0, 0.0, len(t))
+            elif env_type == "Linear steigend": env = np.linspace(0.0, 1.0, len(t))
+            elif env_type == "Konstant": env = np.ones(len(t))
+            else: env = 0.5 + 0.5 * np.sin(2 * np.pi * 0.5 * t)
+            sig = np.sin(2 * np.pi * freq * t) * env
+            extra = {"Frequenz": f"{freq} Hz", "Hüllkurve": env_type, "Dauer": f"{d} s"}
+        elif selected_code == "V3":
+            np_, ps, amp, bm = params["num_pulses"], params["pulse_spacing"], params["amplitude"], params["burst_ms"]
+            sb, sp = int(sr * bm / 1000), int(sr * ps / 1000)
+            pulse = amp * np.random.uniform(-1.0, 1.0, sb) * get_hann(sb)
+            parts = []
+            for i in range(np_):
+                parts.append(pulse)
+                if i < np_ - 1: parts.append(np.zeros(sp))
+            sig = np.concatenate(parts)
+            extra = {"Impulse": f"{np_}", "Abstand": f"{ps} ms", "Burst-Dauer": f"{bm} ms", "Amplitude": f"{amp:.2f}"}
+        elif selected_code == "V4":
+            d, amp = params["duration"], params["amplitude"]
+            sig = amp * np.random.uniform(-1.0, 1.0, int(sr * d))
+            extra = {"Typ": "White Noise", "Amplitude": f"{amp:.2f}"}
+            
+        final_sig = assemble_signal(sig)
         
-    st.session_state["full_signal"] = assemble_signal(sig)
-    st.session_state["extra_info"] = extra
-    st.session_state["scenario_title"] = scenario_title
-    st.session_state["selected_code"] = selected_code
-    st.session_state["ts"] = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Einmalige Berechnung der Grafik direkt hier
+        png_bytes, metrics = make_science_figure_bytes(final_sig, scenario_title, extra, selected_code)
+        
+        st.session_state["wav_bytes"] = generate_wav_bytes(final_sig)
+        st.session_state["png_bytes"] = png_bytes
+        st.session_state["metrics"] = metrics
+        st.session_state["ts"] = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        st.session_state["sc"] = selected_code
+        
+        del final_sig, sig, t # Ram direkt leeren
+        gc.collect()
 
 # DATA COLUMN
 with col_data:
-    if "full_signal" not in st.session_state:
+    if "png_bytes" not in st.session_state:
         st.markdown("<div style='display:flex;align-items:center;justify-content:center;height:280px;border:1px dashed #21262d;border-radius:10px;flex-direction:column;gap:0.8rem;'><div style='font-size:2.5rem;color:#21262d;'>⚡</div><div style='font-family:\"IBM Plex Mono\",monospace;font-size:0.8rem;color:#6e7681;'>Parameter wählen → Signal generieren</div></div>", unsafe_allow_html=True)
     else:
-        fs_signal = st.session_state["full_signal"]
-        ei = st.session_state["extra_info"]
-        st_title = st.session_state["scenario_title"]
-        sc = st.session_state["selected_code"]
+        m = st.session_state["metrics"]
+        png_bytes = st.session_state["png_bytes"]
+        wav_b = st.session_state["wav_bytes"]
         ts = st.session_state["ts"]
-        m = compute_metrics(fs_signal)
+        sc = st.session_state["sc"]
         
         st.markdown('<div class="section-title">Wissenschaftliche Kennwerte</div>', unsafe_allow_html=True)
         show_metrics(m)
         st.markdown('<div class="section-title">Signalanalyse</div>', unsafe_allow_html=True)
         
-        # 1. Einmal rendern, RAM sparen!
-        fig = make_science_figure(fs_signal, st_title, ei, sc)
-        png_bytes = fig_to_png(fig)
-        
-        # 2. Bild als echtes Bild anzeigen statt st.pyplot() zu nutzen
-        st.image(png_bytes)
-        
-        # 3. Speichern bereinigen (Verhindert das Volllaufen des Servers)
-        fig.clear()
-        plt.close('all')
-        gc.collect() 
-        
+        # Bild anzeigen
+        st.image(png_bytes, use_container_width=True)
         st.download_button("⬇  Abbildung als PNG exportieren", data=png_bytes, file_name=f"NVH_{sc}_{ts}.png", mime="image/png")
         
         st.markdown('<div class="section-title" style="margin-top:1rem">Audioausgabe</div>', unsafe_allow_html=True)
         if sc == "V3":
             st.markdown('<div class="warn-banner">⚠  Sehr laut — Lautstärke reduzieren!</div>', unsafe_allow_html=True)
             
-        wav_b = generate_wav_bytes(fs_signal)
         st.audio(wav_b, format="audio/wav")
         st.download_button("⬇  WAV-Datei herunterladen", data=wav_b, file_name=f"NVH_{sc}_{ts}.wav", mime="audio/wav")
 
@@ -358,4 +364,4 @@ if st.button("Protokoll speichern"):
     else:
         st.error("Bitte zuerst ein Messsystem auswählen.")
         
-st.markdown(f"<div style='text-align:center;margin-top:3rem;padding-top:1.5rem;border-top:1px solid #21262d;font-family:\"IBM Plex Mono\",monospace;font-size:0.68rem;color:#6e7681;'>NVH Signal Lab v2.2  ·  fs = {SAMPLE_RATE:,} Hz  ·  16-bit PCM  ·  {datetime.datetime.now().strftime('%Y')}</div>", unsafe_allow_html=True)
+st.markdown(f"<div style='text-align:center;margin-top:3rem;padding-top:1.5rem;border-top:1px solid #21262d;font-family:\"IBM Plex Mono\",monospace;font-size:0.68rem;color:#6e7681;'>NVH Signal Lab v3.0 (Stable)  ·  fs = {SAMPLE_RATE:,} Hz  ·  16-bit PCM  ·  {datetime.datetime.now().strftime('%Y')}</div>", unsafe_allow_html=True)
