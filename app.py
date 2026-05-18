@@ -133,45 +133,54 @@ elif test_scenario == "V2b: Pegel-Stufentest":
         st.success(f"{freq} Hz")
 
 # ==================================================
-# ✅ V3 Clipping-Test FINAL
+# ✅ V3 Clipping-Test (Noise Burst Version)
 # ==================================================
 elif test_scenario == "V3: Clipping-Test":
 
-    st.write("Clipping-Test mit lauten Burst-Impulsen")
+    st.write("Clipping-Test mit lauten Rausch-Impulsen (Noise Bursts)")
 
+    # Anzahl Impulse
     num_pulses = st.slider("Anzahl Impulse", 1, 20, 5)
+
+    # Abstand
     pulse_spacing = st.slider("Abstand (ms)", 10, 1000, 200)
-    amplitude = st.slider("Intensität", 0.1, 2.0, 1.2)
 
-    burst_freq = 2000
-    burst_duration = 0.05  # länger = lauter!
+    # Intensität (wirksamer als vorher!)
+    amplitude = st.slider("Intensität", 0.2, 2.0, 1.0)
 
-    t = np.linspace(0, burst_duration, int(SAMPLE_RATE * burst_duration), endpoint=False)
+    # 👉 längerer Burst = mehr Energie = deutlich lauter
+    burst_duration = 0.05  # 50 ms
 
-    pulse = amplitude * np.sin(2 * np.pi * burst_freq * t)
+    samples_per_burst = int(SAMPLE_RATE * burst_duration)
+    samples_spacing = int(SAMPLE_RATE * pulse_spacing / 1000)
 
-    # Fenster → verhindert Limiting im Browser
-    pulse *= np.hanning(len(pulse))
+    # 👉 Weißes Rauschen als Impuls
+    base_noise = np.random.uniform(-1.0, 1.0, samples_per_burst)
 
-    spacing = int(SAMPLE_RATE * pulse_spacing / 1000)
+    # 👉 Fensterung (wichtig!)
+    window = np.hanning(samples_per_burst)
 
+    # 👉 finaler Burst
+    single_pulse = amplitude * base_noise * window
+
+    # 👉 Sequenz erzeugen
     signal = []
 
     for i in range(num_pulses):
-        signal.append(pulse)
+        signal.append(single_pulse)
 
         if i < num_pulses - 1:
-            signal.append(np.zeros(spacing))
+            signal.append(np.zeros(samples_spacing))
 
     signal = np.concatenate(signal)
 
+    # 👉 Trigger hinzufügen
     full_signal = assemble_signal(signal)
 
     if st.button("▶️ Test starten"):
-        st.warning("⚠️ Laut! Vorsicht mit Kopfhörern!")
+        st.warning("⚠️ Sehr laut! Vorsicht mit Kopfhörern!")
         st.audio(generate_wav_bytes(full_signal), format="audio/wav")
-        st.success(f"{num_pulses} Impulse | Intensität: {amplitude}")
-
+        st.success(f"{num_pulses} Noise-Impulse | Intensität: {amplitude}")
 # ==================================================
 # V4 Rauschen
 # ==================================================
