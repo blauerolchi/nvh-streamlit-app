@@ -2,179 +2,202 @@ import streamlit as st
 import numpy as np
 import io
 import scipy.io.wavfile as wav
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
-import datetime
 
 # --------------------------------------------------
-# PAGE CONFIG
+# UI Setup
 # --------------------------------------------------
-st.set_page_config(page_title="NVH Signal Lab", layout="wide")
+st.set_page_config(page_title="NVH Signal Generator", layout="centered")
+st.title("🎛️ NVH Hardware-Validierung")
+st.write("Signalquelle mit synchronisierbaren Audio-Triggern (Start + Ende)")
 
 # --------------------------------------------------
-# CONSTANTS
+# Szenarien
+# --------------------------------------------------
+SCENARIOS = [
+    "V2a: Frequenz-Sweep",
+    "V2b: Pegel-Stufentest",
+    "V3: Clipping-Test",
+    "V4: Weißes Rauschen"
+]
+
+test_scenario = st.sidebar.radio("Wähle ein Messszenario:", SCENARIOS)
+
+# --------------------------------------------------
+# Konstanten
 # --------------------------------------------------
 SAMPLE_RATE = 44100
 
-SCENARIOS = {
-    "V2a": "Frequenz-Sweep",
-    "V2b": "Pegel-Stufentest",
-    "V3":  "Clipping / Noise Burst",
-    "V4":  "Weißes Rauschen"
-}
-
 # --------------------------------------------------
-# AUDIO
+# WAV Generator
 # --------------------------------------------------
 def generate_wav_bytes(signal):
-    signal = np.clip(signal, -1.0, 1.0)
-    signal_int16 = np.int16(signal * 32767)
+    max_val = np.max(np.abs(signal))
+    if max_val == 0:
+        signal_normalized = signal
+    else:
+        signal_normalized = np.int16(signal / max_val * 32767 * 0.8)
+
     byte_io = io.BytesIO()
-    wav.write(byte_io, SAMPLE_RATE, signal_int16)
+    wav.write(byte_io, SAMPLE_RATE, signal_normalized)
     return byte_io.getvalue()
 
-def create_beep_trigger(freq):
-    t = np.linspace(0, 0.05, int(SAMPLE_RATE * 0.05), endpoint=False)
-    beep = 0.9 * np.sin(2 * np.pi * freq * t) * np.hanning(len(t))
-    pause = np.zeros(int(SAMPLE_RATE * 0.05))
-    return np.concatenate([beep, pause, beep, pause, beep])
+# --------------------------------------------------
+# 🔊 3x BEEP TRIGGER
+# --------------------------------------------------
+def create_beep_trigger(freq=2000):
+    """
+    3 klare Sinus-Pieptöne für Synchronisation
+    """
 
+    beep_duration = 0.05   # 50 ms
+    pause_duration = 0.05  # 50 ms
+
+    t = np.linspace(0, beep_duration, int(SAMPLE_RATE * beep_duration), endpoint=False)
+
+    # Sinus-Beep
+    beep = 0.9 * np.sin(2 * np.pi * freq * t)
+
+    # weiches Einschwingen (verhindert Klicks)
+    window = np.hanning(len(beep))
+    beep = beep * window
+
+    pause = np.zeros(int(SAMPLE_RATE * pause_duration))
+
+    trigger = np.concatenate([
+        beep, pause,
+        beep, pause,
+        beep
+    ])
+
+    return trigger
+
+# --------------------------------------------------
+# Signalzusammenbau
+# --------------------------------------------------
 def assemble_signal(main_signal):
-    pause = np.zeros(int(0.3 * SAMPLE_RATE))
-    return np.concatenate([
-        create_beep_trigger(2000),
+
+    pause = np.zeros(int(0.3 * SAMPLE_RATE))  # 300 ms Abstand
+
+    start_trigger = create_beep_trigger(2000)   # Start
+    end_trigger   = create_beep_trigger(3000)   # Ende (andere Frequenz!)
+
+    full_signal = np.concatenate([
+        start_trigger,
         pause,
         main_signal,
         pause,
-        create_beep_trigger(3000)
+        end_trigger
     ])
 
-# --------------------------------------------------
-# METRICS
-# --------------------------------------------------
-def compute_metrics(signal):
-    rms = float(np.sqrt(np.mean(signal**2)))
-    peak = float(np.max(np.abs(signal)))
-    crest = peak / rms if rms > 0 else 0
-
-    return {
-        "duration": len(signal) / SAMPLE_RATE,
-        "rms": rms,
-        "peak": peak,
-        "crest_db": 20 * np.log10(crest) if crest > 0 else -120,
-        "db_rms": 20 * np.log10(rms) if rms > 0 else -120,
-        "db_peak": 20 * np.log10(peak) if peak > 0 else -120
-    }
+    return full_signal
 
 # --------------------------------------------------
-# PLOT
+# UI Anzeige
 # --------------------------------------------------
-def make_plot(signal):
-    fig = plt.figure(figsize=(10, 6))
+st.subheader(test_scenario)
 
-    t = np.linspace(0, len(signal) / SAMPLE_RATE, len(signal))
+# ==================================================
+# V2a Sweep
+# ==================================================
+if test_scenario == "V2a: Frequenz-Sweep":
 
-    plt.subplot(2,1,1)
-    plt.plot(t, signal)
-    plt.title("Zeitverlauf")
+    st.write("Logarithmischer Sweep mit Start-/End-Trigger (3x Beep)")
 
-    # FFT
-    fft = np.abs(np.fft.rfft(signal))
-    freqs = np.fft.rfftfreq(len(signal), 1/SAMPLE_RATE)
+    duration = st.slider("Sweepdauer (Sekunden)", 10, 120, 60)
 
-    plt.subplot(2,1,2)
-    if len(freqs) > 1:
-        plt.semilogx(freqs[1:], 20*np.log10(np.maximum(fft[1:], 1e-12)))
-    plt.title("Spektrum")
-
-    plt.tight_layout()
-    return fig
-
-# --------------------------------------------------
-# SIDEBAR
-# --------------------------------------------------
-scenario = st.sidebar.radio("Szenario", list(SCENARIOS.keys()))
-
-st.title("🔬 NVH Signal Lab")
-st.subheader(f"{scenario} – {SCENARIOS[scenario]}")
-
-# --------------------------------------------------
-# PARAMETER / SIGNAL
-# --------------------------------------------------
-signal = None
-
-# V2a
-if scenario == "V2a":
-    duration = st.slider("Dauer (s)", 10, 120, 60)
-    t = np.linspace(0, duration, int(SAMPLE_RATE * duration))
+    t = np.linspace(0, duration, SAMPLE_RATE * duration)
 
     f_start = 0.5
-    f_end = SAMPLE_RATE/2 * 0.95
+    f_end = SAMPLE_RATE / 2 * 0.95
 
     L = duration / np.log(f_end / f_start)
-    phase = 2*np.pi*f_start*L*(np.exp(t/L)-1)
+    phase = 2 * np.pi * f_start * L * (np.exp(t / L) - 1)
 
     signal = np.sin(phase)
 
-# V2b
-elif scenario == "V2b":
+    full_signal = assemble_signal(signal)
+
+    if st.button("▶️ Test starten"):
+        st.warning("⚠️ Messsysteme müssen bereits aufnehmen!")
+        st.audio(generate_wav_bytes(full_signal), format="audio/wav")
+
+# ==================================================
+# V2b Pegeltest
+# ==================================================
+elif test_scenario == "V2b: Pegel-Stufentest":
+
+    st.write("Sinuston mit variabler Frequenz + Trigger")
+
     freq = st.slider("Frequenz (Hz)", 10, 20000, 550)
-    duration = st.slider("Dauer (s)", 5, 60, 45)
+    duration = st.slider("Dauer (Sekunden)", 5, 60, 45)
 
-    t = np.linspace(0, duration, int(SAMPLE_RATE * duration))
-    env = np.linspace(1, 0, len(t))
+    t = np.linspace(0, duration, SAMPLE_RATE * duration)
+    envelope = np.linspace(1.0, 0.0, len(t))
 
-    signal = np.sin(2*np.pi*freq*t)*env
+    signal = np.sin(2 * np.pi * freq * t) * envelope
 
-# V3
-elif scenario == "V3":
-    pulses = st.slider("Impulse", 1, 20, 5)
-    spacing = st.slider("Abstand (ms)", 10, 1000, 200)
-    amp = st.slider("Amplitude", 0.2, 2.0, 1.2)
-    dur = st.slider("Burst (ms)", 5, 100, 50)
+    full_signal = assemble_signal(signal)
 
-    s_burst = int(SAMPLE_RATE*dur/1000)
-    s_space = int(SAMPLE_RATE*spacing/1000)
+    if st.button("▶️ Test starten"):
+        st.warning("⚠️ Messsysteme vorher starten!")
+        st.audio(generate_wav_bytes(full_signal), format="audio/wav")
+        st.success(f"Frequenz: {freq} Hz")
 
-    base = np.random.uniform(-1,1,s_burst)
-    pulse = amp * base * np.hanning(s_burst)
+# ==================================================
+# V3 Clipping
+# ==================================================
+elif test_scenario == "V3: Clipping-Test":
 
-    sig = []
-    for i in range(pulses):
-        sig.append(pulse)
-        if i < pulses-1:
-            sig.append(np.zeros(s_space))
-    signal = np.concatenate(sig)
+    st.write("Impuls-Test mit Trigger")
 
-# V4
-elif scenario == "V4":
-    duration = st.slider("Dauer (s)", 5, 60, 15)
-    signal = np.random.uniform(-1,1,int(SAMPLE_RATE*duration))
+    duration = 0.05
+    signal = np.random.uniform(-1.0, 1.0, int(SAMPLE_RATE * duration))
+
+    full_signal = assemble_signal(signal)
+
+    if st.button("▶️ Test starten"):
+        st.audio(generate_wav_bytes(full_signal), format="audio/wav")
+
+# ==================================================
+# V4 Rauschen
+# ==================================================
+elif test_scenario == "V4: Weißes Rauschen":
+
+    st.write("Weißes Rauschen mit Triggern")
+
+    duration = st.slider("Dauer (Sekunden)", 5, 60, 15)
+
+    signal = np.random.uniform(-1.0, 1.0, SAMPLE_RATE * duration)
+
+    full_signal = assemble_signal(signal)
+
+    if st.button("▶️ Test starten"):
+        st.audio(generate_wav_bytes(full_signal), format="audio/wav")
 
 # --------------------------------------------------
-# OUTPUT
+# Messprotokoll
 # --------------------------------------------------
-if signal is not None:
+st.markdown("---")
+st.subheader("📝 Messprotokoll")
 
-    full = assemble_signal(signal)
+col1, col2 = st.columns(2)
 
-    metrics = compute_metrics(full)
+with col1:
+    system = st.selectbox(
+        "System:",
+        ["Bitte wählen...", "Pico", "SQuadriga"]
+    )
 
-    st.write("### Kennwerte")
-    st.write(metrics)
+with col2:
+    timestamp = st.number_input(
+        "Signalverlust (Sekunde)",
+        0.0, 120.0, 0.0, step=0.1
+    )
 
-    fig = make_plot(full)
-    st.pyplot(fig)
+bemerkung = st.text_area("Notizen:")
 
-    if st.button("▶ Abspielen"):
-        wav_bytes = generate_wav_bytes(full)
-        st.audio(wav_bytes, format="audio/wav")
-
-        st.download_button(
-            "WAV Download",
-            data=wav_bytes,
-            file_name="signal.wav",
-            mime="audio/wav"
-        )
+if st.button("Protokoll speichern"):
+    if system != "Bitte wählen...":
+        st.success("✅ Eintrag gespeichert")
+    else:
+        st.error("Bitte System wählen")
