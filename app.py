@@ -45,19 +45,14 @@ def generate_wav_bytes(signal):
 # 🔊 3x BEEP TRIGGER
 # --------------------------------------------------
 def create_beep_trigger(freq=2000):
-    """
-    3 klare Sinus-Pieptöne für Synchronisation
-    """
-
-    beep_duration = 0.05   # 50 ms
-    pause_duration = 0.05  # 50 ms
+    beep_duration = 0.05
+    pause_duration = 0.05
 
     t = np.linspace(0, beep_duration, int(SAMPLE_RATE * beep_duration), endpoint=False)
 
-    # Sinus-Beep
     beep = 0.9 * np.sin(2 * np.pi * freq * t)
 
-    # weiches Einschwingen (verhindert Klicks)
+    # Fenster gegen Klicks
     window = np.hanning(len(beep))
     beep = beep * window
 
@@ -76,10 +71,10 @@ def create_beep_trigger(freq=2000):
 # --------------------------------------------------
 def assemble_signal(main_signal):
 
-    pause = np.zeros(int(0.3 * SAMPLE_RATE))  # 300 ms Abstand
+    pause = np.zeros(int(0.3 * SAMPLE_RATE))
 
-    start_trigger = create_beep_trigger(2000)   # Start
-    end_trigger   = create_beep_trigger(3000)   # Ende (andere Frequenz!)
+    start_trigger = create_beep_trigger(2000)
+    end_trigger = create_beep_trigger(3000)
 
     full_signal = np.concatenate([
         start_trigger,
@@ -105,7 +100,7 @@ if test_scenario == "V2a: Frequenz-Sweep":
 
     duration = st.slider("Sweepdauer (Sekunden)", 10, 120, 60)
 
-    t = np.linspace(0, duration, SAMPLE_RATE * duration)
+    t = np.linspace(0, duration, int(SAMPLE_RATE * duration))
 
     f_start = 0.5
     f_end = SAMPLE_RATE / 2 * 0.95
@@ -131,7 +126,7 @@ elif test_scenario == "V2b: Pegel-Stufentest":
     freq = st.slider("Frequenz (Hz)", 10, 20000, 550)
     duration = st.slider("Dauer (Sekunden)", 5, 60, 45)
 
-    t = np.linspace(0, duration, SAMPLE_RATE * duration)
+    t = np.linspace(0, duration, int(SAMPLE_RATE * duration))
     envelope = np.linspace(1.0, 0.0, len(t))
 
     signal = np.sin(2 * np.pi * freq * t) * envelope
@@ -144,41 +139,28 @@ elif test_scenario == "V2b: Pegel-Stufentest":
         st.success(f"Frequenz: {freq} Hz")
 
 # ==================================================
-# V3 Clipping / Impuls-Serie (mit Intensität!)
+# V3 Clipping-Test (FIXED VERSION)
 # ==================================================
 elif test_scenario == "V3: Clipping-Test":
 
-    st.write("Impuls-Serie mit einstellbarer Intensität (Clipping-Test)")
+    st.write("Impuls-Serie mit einstellbarer Intensität (Burst-basiert)")
 
-    # ✅ Anzahl Impulse
     num_pulses = st.slider("Anzahl Impulse", 1, 20, 5)
-
-    # ✅ Abstand
     pulse_spacing = st.slider("Abstand zwischen Impulsen (ms)", 10, 1000, 200)
-
-    # ✅ 🔥 NEU: Intensität
     amplitude = st.slider("Impulsstärke", 0.1, 2.0, 1.0)
 
-    pulse_duration = 0.003  # 3 ms → härterer "Schlag"
-
-    samples_per_pulse = int(SAMPLE_RATE * pulse_duration)
-    samples_spacing = int(SAMPLE_RATE * (pulse_spacing / 1000))
-
-    # 👉 "Peitschenschlag" als Burst (NICHT mehr Einzelpeak!)
-    burst_freq = 2000  # gut hörbar & messbar
-    burst_duration = 0.02  # 20 ms (wichtig!)
+    burst_freq = 2000
+    burst_duration = 0.02
 
     t_burst = np.linspace(0, burst_duration, int(SAMPLE_RATE * burst_duration), endpoint=False)
 
-    # Sinus Burst
     single_pulse = amplitude * np.sin(2 * np.pi * burst_freq * t_burst)
 
-    # Fenster -> verhindert Klicks & Limiting
     window = np.hanning(len(single_pulse))
     single_pulse = single_pulse * window
-    ``
 
-    # 👉 Sequenz bauen
+    samples_spacing = int(SAMPLE_RATE * (pulse_spacing / 1000))
+
     signal = []
 
     for i in range(num_pulses):
@@ -189,14 +171,11 @@ elif test_scenario == "V3: Clipping-Test":
 
     signal = np.concatenate(signal)
 
-    # 👉 Trigger hinzufügen (Start + Ende)
     full_signal = assemble_signal(signal)
 
     if st.button("▶️ Test starten"):
         st.warning("⚠️ Messsysteme vorher starten!")
-
         st.audio(generate_wav_bytes(full_signal), format="audio/wav")
-
         st.success(f"{num_pulses} Impulse | Intensität: {amplitude}")
 
 # ==================================================
@@ -208,7 +187,7 @@ elif test_scenario == "V4: Weißes Rauschen":
 
     duration = st.slider("Dauer (Sekunden)", 5, 60, 15)
 
-    signal = np.random.uniform(-1.0, 1.0, SAMPLE_RATE * duration)
+    signal = np.random.uniform(-1.0, 1.0, int(SAMPLE_RATE * duration))
 
     full_signal = assemble_signal(signal)
 
@@ -224,16 +203,10 @@ st.subheader("📝 Messprotokoll")
 col1, col2 = st.columns(2)
 
 with col1:
-    system = st.selectbox(
-        "System:",
-        ["Bitte wählen...", "Pico", "SQuadriga"]
-    )
+    system = st.selectbox("System:", ["Bitte wählen...", "Pico", "SQuadriga"])
 
 with col2:
-    timestamp = st.number_input(
-        "Signalverlust (Sekunde)",
-        0.0, 120.0, 0.0, step=0.1
-    )
+    timestamp = st.number_input("Signalverlust (Sekunde)", 0.0, 120.0, 0.0, step=0.1)
 
 bemerkung = st.text_area("Notizen:")
 
@@ -242,3 +215,4 @@ if st.button("Protokoll speichern"):
         st.success("✅ Eintrag gespeichert")
     else:
         st.error("Bitte System wählen")
+``
