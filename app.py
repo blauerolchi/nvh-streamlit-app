@@ -144,25 +144,39 @@ elif test_scenario == "V2b: Pegel-Stufentest":
         st.success(f"Frequenz: {freq} Hz")
 
 # ==================================================
-# V3 Clipping / Impuls-Serie
+# V3 Clipping / Impuls-Serie (mit Intensität!)
 # ==================================================
 elif test_scenario == "V3: Clipping-Test":
 
-    st.write("Serie von Impulsen zur Analyse von Clipping und Systemreaktion")
+    st.write("Impuls-Serie mit einstellbarer Intensität (Clipping-Test)")
 
     # ✅ Anzahl Impulse
     num_pulses = st.slider("Anzahl Impulse", 1, 20, 5)
 
-    # ✅ Abstand zwischen Impulsen
+    # ✅ Abstand
     pulse_spacing = st.slider("Abstand zwischen Impulsen (ms)", 10, 1000, 200)
 
-    pulse_duration = 0.005  # 5 ms Impulsdauer
+    # ✅ 🔥 NEU: Intensität
+    amplitude = st.slider("Impulsstärke", 0.1, 2.0, 1.0)
+
+    pulse_duration = 0.003  # 3 ms → härterer "Schlag"
 
     samples_per_pulse = int(SAMPLE_RATE * pulse_duration)
     samples_spacing = int(SAMPLE_RATE * (pulse_spacing / 1000))
 
-    # 👉 einzelner "Peitschenschlag" (breitbandig)
-    single_pulse = np.random.uniform(-1.0, 1.0, samples_per_pulse)
+    # 👉 harter "Peitschenschlag"
+    single_pulse = np.zeros(samples_per_pulse)
+
+    # sehr steiler Impuls → gut für Clipping
+    peak_len = int(samples_per_pulse * 0.2)
+
+    single_pulse[:peak_len] = amplitude
+    single_pulse[peak_len:2*peak_len] = -amplitude
+
+    # kurze Ausklingphase
+    if len(single_pulse) > 2*peak_len:
+        decay = np.linspace(1, 0, len(single_pulse) - 2*peak_len)
+        single_pulse[2*peak_len:] = amplitude * decay
 
     # 👉 Sequenz bauen
     signal = []
@@ -170,20 +184,20 @@ elif test_scenario == "V3: Clipping-Test":
     for i in range(num_pulses):
         signal.append(single_pulse)
 
-        # Abstand danach (außer beim letzten)
         if i < num_pulses - 1:
             signal.append(np.zeros(samples_spacing))
 
     signal = np.concatenate(signal)
 
-    # 👉 Trigger hinzufügen (deine neue SynchronLogik!)
+    # 👉 Trigger hinzufügen (Start + Ende)
     full_signal = assemble_signal(signal)
 
     if st.button("▶️ Test starten"):
         st.warning("⚠️ Messsysteme vorher starten!")
+
         st.audio(generate_wav_bytes(full_signal), format="audio/wav")
 
-        st.success(f"{num_pulses} Impulse erzeugt")
+        st.success(f"{num_pulses} Impulse | Intensität: {amplitude}")
 
 # ==================================================
 # V4 Rauschen
