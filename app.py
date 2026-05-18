@@ -1,7 +1,11 @@
+# WICHTIG: Diese Limits MÜSSEN in Zeile 1 stehen, vor allen anderen Imports!
 import os
-# Zwingt Matplotlib auf OS-Ebene in den Headless-Modus, BEVOR es geladen wird.
-# Verhindert sofortige Abstürze (X11-Crashes) beim Booten des Cloud-Servers.
-os.environ['MPLBACKEND'] = 'Agg'
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+os.environ['MPLBACKEND'] = 'Agg' # Verhindert X11-Display-Abstürze beim Booten
 
 import streamlit as st
 import numpy as np
@@ -190,7 +194,7 @@ def make_science_figure_bytes(signal, title, extra_info, scenario_code):
     for k, v in extra_info.items():
         info_lines.append((k, str(v)))
         
-    info_lines += [("", ""), ("SEP", ""), ("Erstellt", datetime.datetime.now().strftime("%Y-%m-%d")), ("Version", "NVH Lab v5.1 (Stable Boot)")]
+    info_lines += [("", ""), ("SEP", ""), ("Erstellt", datetime.datetime.now().strftime("%Y-%m-%d")), ("Version", "NVH Lab v5.2 (Stable Boot)")]
     y = 0.97
     
     for label, value in info_lines:
@@ -366,4 +370,4 @@ if st.button("Protokoll speichern"):
     else:
         st.error("Bitte zuerst ein Messsystem auswählen.")
         
-st.markdown(f"<div style='text-align:center;margin-top:3rem;padding-top:1.5rem;border-top:1px solid #21262d;font-family:\"IBM Plex Mono\",monospace;font-size:0.68rem;color:#6e7681;'>NVH Signal Lab v5.1 (Stable Boot)  ·  fs = {SAMPLE_RATE:,} Hz  ·  16-bit PCM</div>", unsafe_allow_html=True)
+st.markdown(f"<div style='text-align:center;margin-top:3rem;padding-top:1.5rem;border-top:1px solid #21262d;font-family:\"IBM Plex Mono\",monospace;font-size:0.68rem;color:#6e7681;'>NVH Signal Lab v5.2 (Stable Boot)  ·  fs = {SAMPLE_RATE:,} Hz  ·  16-bit PCM</div>", unsafe_allow_html=True)
